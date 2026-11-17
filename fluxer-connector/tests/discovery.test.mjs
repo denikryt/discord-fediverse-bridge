@@ -11,6 +11,12 @@ test('production discovery refuses userinfo, fragments, path, HTTP and metadata 
   }
 });
 
+test('dotted DNS origins cannot be trusted as a different authenticated identity', () => {
+  assert.throws(() => validateOrigin('https://fx.test.'));
+  assert.equal(validateOrigin('https://FX.test:443').origin, 'https://fx.test');
+  assert.equal(validateOrigin('https://other.test').origin, 'https://other.test');
+});
+
 test('bot REST needs api_public and an approved self-hosted API host', () => {
   assert.throws(() => validateDiscoveryDocument('https://example.test',
     {endpoints: {api: 'https://example.test'}}));

@@ -44,7 +44,8 @@ function readConfig(): {
   const requestedPort = required('FLUXER_RPC_PORT');
   const rpcPort = Number(requestedPort);
   if (!Number.isInteger(rpcPort) || rpcPort < 1 || rpcPort > 65535 ||
-      connectorKey.length > 255 || bearer.length < 8 ||
+      connectorKey.length > 255 || connectorKey === 'discord-primary' ||
+      bearer.length < 8 ||
       !/^[a-z0-9.-]+$/i.test(apiHost) || !/^[a-z0-9.-]+$/i.test(gatewayHost)) {
     throw new Error('invalid Fluxer Node deployment configuration');
   }

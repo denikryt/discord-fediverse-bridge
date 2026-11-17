@@ -63,7 +63,7 @@ class FluxerSingleTrustedProvisioning(unittest.TestCase):
             self.assertIsNotNone(original)
             first_id = original.id
             self.assertEqual(original.instance_origin, 'https://one.test')
-        self._admit(self._config(origin='https://one.test.'))
+        self._admit(self._config(origin='https://ONE.test:443'))
         with self.db.session() as session:
             rows = session.scalars(select(PlatformConnector).where(PlatformConnector.platform == 'fluxer')).all()
             self.assertEqual(len(rows), 1)
@@ -80,6 +80,26 @@ class FluxerSingleTrustedProvisioning(unittest.TestCase):
             rows = session.scalars(select(PlatformConnector).where(PlatformConnector.platform == 'fluxer')).all()
             self.assertEqual([(r.connector_key, r.instance_origin) for r in rows],
                              [('fx-one', 'https://one.test')])
+
+    def test_reserved_connector_preflight_leaves_existing_empty_file_unchanged(self) -> None:
+        """A colliding bootstrap key is refused before any released-v0/v1 migration."""
+        from tempfile import TemporaryDirectory
+        from src.db.repositories.platform_surfaces import preflight_instance_mode
+        import sqlite3
+
+        with TemporaryDirectory() as root:
+            path = Path(root) / 'existing.sqlite'
+            conn = sqlite3.connect(path)
+            conn.execute('VACUUM')
+            conn.close()
+            before = path.read_bytes()
+            with self.assertRaises(ValueError):
+                preflight_instance_mode(
+                    f'sqlite:///{path}', platform='fluxer',
+                    connector_key='discord-primary', instance_origin='https://fx.test',
+                )
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(sqlite3.connect(path).execute('PRAGMA user_version').fetchone()[0], 0)
 
     def test_two_saved_rows_refused_even_if_fluxer_disabled(self) -> None:
         """An invalid preexisting DB is rejected, not silently cleaned or adopted."""
@@ -145,6 +165,17 @@ class FluxerPreMigrationOwnership(unittest.TestCase):
         before = hashlib.sha256(self.path.read_bytes()).digest()
         self._preflight()
         self.assertEqual(hashlib.sha256(self.path.read_bytes()).digest(), before)
+
+    def test_reserved_bootstrap_key_refuses_inert_v1_without_changes(self) -> None:
+        """The inert Discord metadata row never authorizes a Fluxer name collision."""
+        db = self._new_v1()
+        db.close()
+        before = self.path.read_bytes()
+        with self.assertRaises(ValueError):
+            self._preflight(key='discord-primary')
+        self.assertEqual(self.path.read_bytes(), before)
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 1)
 
     def test_existing_service_actor_key_blocks_fluxer_without_content(self) -> None:
         """A key-only Discord startup cannot leak its AP identity to Fluxer."""

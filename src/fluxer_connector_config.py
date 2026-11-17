@@ -51,6 +51,18 @@ def parse_fluxer_connectors(raw: str | None) -> tuple[FluxerConnectorConfig, ...
         if any(not isinstance(value, str) or not value or value != value.strip() for value in values):
             raise ValueError("Fluxer connector requires nonempty string key, endpoints and secrets")
         key, requested_origin, rpc_url, transport_secret = values
+        # Discord's bootstrap connector key is reserved even on an empty v0
+        # file: accepting it would migrate before transactional admission fails.
+        if key == "discord-primary":
+            raise ValueError("Fluxer connector key is reserved for Discord")
+        # Node rejects shorter private bearers before SDK startup. Refuse at
+        # Python settings admission instead, before opening SQLite or AP keys.
+        if len(transport_secret) < 8:
+            raise ValueError("Fluxer transport bearer is too short")
+        # WHATWG URL preserves a final DNS dot, while SQLite canonical_origin
+        # strips it. Disallow that spelling on both sides before persistence.
+        if (urlsplit(requested_origin).hostname or "").endswith("."):
+            raise ValueError("Fluxer origin cannot end with a DNS root dot")
         if not isinstance(entry.get("allow_insecure_local_development", False), bool):
             raise ValueError("Fluxer development HTTP opt-in must be boolean")
         allow_http = entry.get("allow_insecure_local_development", False)

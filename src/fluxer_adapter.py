@@ -374,6 +374,42 @@ class FluxerAdapter:
             raise PlatformOperationError('forbidden', 'Fluxer bot permission not verified')
         return applied_tags
 
+    async def _preflight_thread_send(self, thread: ThreadRef) -> None:
+        """Authorize sends in the thread, independently of parent forum SendMessages.
+
+        Physical thread identity and guild membership are verified before ACL.
+        The Node executor repeats fresh thread/parent reads and bit-38 checks
+        immediately before the actual SDK write to close permission races.
+        """
+        self._scope(thread.connector_key)
+        if await self._attested_bot_id() is None:
+            raise PlatformOperationError('unavailable', 'Fluxer bot identity not attested')
+        verified = (await self.fetch_thread(thread)).thread
+        parent = (await self.fetch_channel(verified.channel)).channel
+        guild = verified.channel.external_guild_id
+        if (guild is None or parent.external_guild_id != guild
+            or parent.kind not in ('forum', 'text', 'announcement')):
+            raise PlatformOperationError('forbidden', 'Fluxer thread parent/guild not verified')
+        # A ThreadRef stores the parent forum as channel; creating a scoped
+        # ChannelRef for ACL is only an address for an already verified thread,
+        # never a fabricated forum channel or permission inheritance shortcut.
+        physical = ChannelRef(self._connector.key, verified.external_thread_id,
+                              'unknown', guild)
+        principal = AuthorRef(self._connector.key, self._bot_id, 'bot', 'Fluxer bridge')
+        actions = frozenset({'view_channel', 'read_history', 'send_message'})
+        grants = await self.check_permissions(principal, physical, actions)
+        parent_grants = await self.check_permissions(
+            principal, parent, frozenset({'view_channel'}),
+        )
+        if (any(grants.get(action) != 'allowed' for action in actions)
+            or parent_grants.get('view_channel') != 'allowed'):
+            raise PlatformOperationError('forbidden', 'Fluxer thread send permission not verified')
+        # A current ACL grant is not sufficient to advertise a server-verified
+        # operation. Check this exact thread after permission denial so a
+        # revoked right stays `forbidden`, not `unsupported`.
+        if not (await self.capabilities(physical)).thread_replies:
+            raise PlatformOperationError('unsupported', 'Fluxer thread replies not verified')
+
     def _mint_coordinator_dispatch_permit(
         self, *, proof: CommittedCreateDispatchProof,
         intent_id: int, attempt: CreateAttempt, request_fingerprint: str,
@@ -543,7 +579,10 @@ class FluxerAdapter:
             else:
                 channel = destination
                 container_id = destination.external_channel_id
-            await self._preflight(channel, is_forum=False, action='send_message')
+            if isinstance(destination, ThreadRef):
+                await self._preflight_thread_send(destination)
+            else:
+                await self._preflight(channel, is_forum=False, action='send_message')
             response = await self._call('send_message', {
                 'container_id': container_id, 'guild_id': channel.external_guild_id,
                 'reply_to_message_id': reply_to.external_message_id if reply_to else None,

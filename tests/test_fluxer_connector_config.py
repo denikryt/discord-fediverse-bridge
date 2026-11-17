@@ -135,6 +135,25 @@ class FluxerConfigTests(unittest.TestCase):
             with self.subTest(tags=tags), self.assertRaises(ValidationError):
                 self._settings(json.dumps([self._instance(forum_applied_tags=tags)]))
 
+    def test_reserved_connector_and_bearer_strength_fail_before_startup(self) -> None:
+        """A reserved Discord key or short private bearer cannot reach SQLite/SDK."""
+        for secret in ('1234567', 'x'):
+            with self.subTest(secret_length=len(secret)), self.assertRaises(ValidationError):
+                self._settings(json.dumps([self._instance(transport_secret=secret)]))
+        self.assertEqual(len(self._settings(json.dumps([
+            self._instance(transport_secret='12345678')
+        ])).fluxer_connectors), 1)
+        with self.assertRaises(ValidationError):
+            self._settings(json.dumps([self._instance(connector_key='discord-primary')]))
+
+    def test_trailing_dns_dot_refused_before_storage(self) -> None:
+        """A dotted DNS origin cannot diverge from the Node authenticated identity."""
+        with self.assertRaises(ValidationError):
+            self._settings(json.dumps([self._instance(origin='https://FLUXER.example.')]))
+        self.assertEqual(self._settings(json.dumps([self._instance(
+            origin='https://FLUXER.example:443',
+        )])).fluxer_connectors[0].origin, 'https://fluxer.example')
+
     def test_private_rpc_cannot_cross_network_namespace(self) -> None:
         """A sidecar DNS name or alternate loopback spelling cannot receive bearer."""
         for rpc_url in (

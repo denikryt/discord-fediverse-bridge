@@ -35,6 +35,7 @@ class Provider:
         self.lost_ack = False
         self.malformed_receipt = False
         self.permission = 'allowed'
+        self.thread_capability = True
 
     async def handle(self, request):
         """Return transport-normalized read data or record a physical write."""
@@ -50,7 +51,7 @@ class Provider:
                       'guild_id': 'guild-1'}
         elif op == 'capabilities':
             result = {'channel_id': args['channel_id'], 'guild_id': 'guild-1',
-                      'forum_posts': True, 'thread_replies': True, 'attachments': False,
+                      'forum_posts': True, 'thread_replies': self.thread_capability, 'attachments': False,
                       'message_edit_delete': True, 'tag_requirements_verified': True,
                       'requires_tag': False, 'available_tags': []}
         elif op == 'check_permissions':
@@ -332,6 +333,19 @@ class FluxerBotCreateScenarios(unittest.IsolatedAsyncioTestCase):
                                             presentation=self.presentation,
                                             attempt=CreateAttempt('reply-b', 'fluxer-test', 'message', destination))
         self.assertEqual(len(self.provider.remote_messages), 1)
+
+    async def test_unverified_thread_capability_refuses_before_write(self):
+        """A verified parent cannot substitute for unavailable thread capability."""
+        self.provider.thread_capability = False
+        destination = ThreadRef(self.forum, 'thread-9')
+        with self.assertRaises(PlatformOperationError) as caught:
+            await self.adapter.send_message(
+                destination, self.content, reply_to=MessageRef('fluxer-test', 'thread-9', 'parent-3'),
+                presentation=self.presentation,
+                attempt=CreateAttempt('reply-not-verified', 'fluxer-test', 'message', destination),
+            )
+        self.assertEqual(caught.exception.reason, 'unsupported')
+        self.assertEqual(self.provider.remote_messages, [])
 
     async def test_quiesce_joins_inflight_and_refuses_later_calls(self):
         """Close admission while an already-started remote operation is outstanding."""

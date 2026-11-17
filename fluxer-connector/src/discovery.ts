@@ -49,7 +49,10 @@ export function validateOrigin(raw: string, policy: DiscoveryPolicy = {}): URL {
   let url: URL;
   try { url = new URL(raw); }
   catch { throw new Error('invalid Fluxer discovery origin'); }
-  if (!url.hostname || url.username || url.password || url.search || url.hash ||
+  // Python's persisted canonical origin strips a DNS root dot. Refuse this
+  // ambiguous form before SDK login so READY identity cannot diverge from DB.
+  if (!url.hostname || url.hostname.endsWith('.') || url.username || url.password ||
+      url.search || url.hash ||
       (url.protocol !== 'https:' && url.protocol !== 'http:')) {
     throw new Error('invalid Fluxer discovery origin');
   }

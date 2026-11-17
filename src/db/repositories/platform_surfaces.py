@@ -46,6 +46,11 @@ def preflight_instance_mode(
     """
     if platform not in {"discord", "fluxer"}:
         raise ValueError("Invalid exclusive platform mode")
+    # The released migration creates discord-primary before final connector
+    # admission. A Fluxer reservation of that key must fail even on an empty
+    # existing database, otherwise a refused startup still mutates its file.
+    if platform == "fluxer" and connector_key == "discord-primary":
+        raise ValueError("Fluxer connector key is reserved for Discord")
     database_name = make_url(database_url).database
     if not database_name:
         raise ValueError("Mode preflight requires a file-backed SQLite database")

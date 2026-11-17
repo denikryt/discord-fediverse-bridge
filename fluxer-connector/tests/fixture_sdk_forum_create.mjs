@@ -2,12 +2,16 @@
  * The fake SDK's REST boundary persists the observed remote post in memory.
  */
 import {EventEmitter} from 'node:events';
-import {appendFileSync} from 'node:fs';
+import {appendFileSync, readFileSync} from 'node:fs';
 import {FluxerNodeService} from '../src/service.ts';
 import {createProductionRpcHandler} from '../src/main.ts';
 import {PrivateRpcError} from '../src/transport.ts';
 
 const logPath=process.argv[2];
+const aclPath=process.argv[5];
+// Tests can revoke only the parent or thread privilege after creating a post.
+const currentAcl=()=>aclPath ? JSON.parse(readFileSync(aclPath, 'utf8')) :
+  {forum_send:true, thread_send:true};
 if (!logPath) throw Error('test requires external effects log');
 // Exercise both explicitly populated snapshots and the measured full REST
 // omission shape, including a starter whose observed ID equals its thread ID.
@@ -24,8 +28,12 @@ function channel(id, kind, parentId=null) {
 }
 const guild={id:'guild-1',fetchRoles:async()=>[{id:'guild-1'},{id:'writer'}],
   members:{async fetch(id){return {id,guild:{id:'guild-1'},roles:{roleIds:['writer']},
-    permissionsIn:()=>({has:(name)=>typeof name==='bigint' ? name===(1n<<38n)
-      :['ViewChannel','ReadMessageHistory','SendMessages'].includes(name)})};}}};
+    permissionsIn:(scope)=>({has:(name)=>{
+      const acl=currentAcl();
+      if(typeof name==='bigint') return name===(1n<<38n) && acl.thread_send;
+      if(name==='SendMessages') return scope.isThread() || acl.forum_send;
+      return ['ViewChannel','ReadMessageHistory'].includes(name);
+    }})};}}};
 const client={on:emitter.on.bind(emitter),off:emitter.off.bind(emitter),
   instance:{endpoints:{api_public:'https://api.fx.test/'}},
   user:null,guilds:{fetch:async()=>guild},

@@ -24,6 +24,19 @@ test('missing mandatory operator settings fail before a discovery HTTP request',
   });
 });
 
+test('reserved Discord connector key refuses Node startup before discovery', async()=>{
+  await withEnv({FLUXER_CONNECTOR_KEY:'discord-primary',
+    FLUXER_ORIGIN:'https://fx.test', FLUXER_BOT_TOKEN_FILE:'/not-mounted',
+    FLUXER_INTERNAL_BEARER:'valid-secret',
+    FLUXER_APPROVED_API_HOST:'api.fx.test',
+    FLUXER_APPROVED_GATEWAY_HOST:'gateway.fx.test',
+    FLUXER_RPC_PORT:'8769',
+    FLUXER_PYTHON_INGRESS_URL:'http://127.0.0.1:8080/internal/fluxer/events',
+  },async()=>{
+    await assert.rejects(runFluxerNodeService(),/invalid Fluxer Node deployment configuration/);
+  });
+});
+
 test('tokenless discovery precedes secret read; missing Node mount refuses SDK startup',async()=>{
   const seen=[];
   const server=createServer((req,res)=>{

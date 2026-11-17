@@ -31,13 +31,15 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
         """Boot a READY Node SDK session and a scoped authenticated Python client."""
         self.tmp = TemporaryDirectory()
         self.effects = Path(self.tmp.name) / 'effects.jsonl'
+        self.acl_state = Path(self.tmp.name) / 'acl.json'
+        self.acl_state.write_text(json.dumps({'forum_send': True, 'thread_send': True}))
         root = Path(__file__).resolve().parents[2]
         self.node = await asyncio.create_subprocess_exec(
             'node', '--experimental-strip-types',
             str(root / 'fluxer-connector/tests/fixture_sdk_forum_create.mjs'),
             str(self.effects),
             ('lose-response' if self._testMethodName == 'test_lost_remote_response_is_unresolved_and_no_repost' else 'lose-message-response' if self._testMethodName == 'test_lost_reply_response_never_reposts' else 'normal'),
-            self.server_contract,
+            self.server_contract, str(self.acl_state),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -135,6 +137,83 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
                           'guildId': 'guild-1'})
         self.assertEqual(effects[1]['sdk_send']['options']['allowedMentions'],
                          {'parse': [], 'repliedUser': False})
+
+    async def test_thread_acl_is_independent_of_parent_forum_send_permission(self) -> None:
+        """Parent SendMessages revoke must not revoke bit-38 thread send at either boundary."""
+        root = await self.adapter.create_forum_thread(
+            self.forum, ContentDocument('root'), title='Forum root',
+            presentation=DeliveryPresentation('bot'), attempt=self.attempt,
+        )
+        for index, (forum_send, thread_send, allowed) in enumerate((
+            (True, True, True), (False, True, True), (True, False, False),
+        )):
+            with self.subTest(forum_send=forum_send, thread_send=thread_send):
+                self.acl_state.write_text(json.dumps({
+                    'forum_send': forum_send, 'thread_send': thread_send,
+                }))
+                # The second successful message replies to the immediately
+                # preceding message, not to a synthetic top-level thread root.
+                parent = (root.starter if index != 1 else
+                          MessageRef('fx-forum', 'thread-9', 'message-12'))
+                before = len([line for line in self.effects.read_text().splitlines()
+                              if 'sdk_send' in json.loads(line)])
+                attempt = CreateAttempt(f'acl-python-{index}', 'fx-forum',
+                                        'message', root.thread)
+                args = {
+                    'container_id': 'thread-9', 'guild_id': 'guild-1',
+                    'reply_to_message_id': parent.external_message_id,
+                    'content': {'body': f'direct-{index}', 'format': 'plain'},
+                    'allowed_mentions': {'parse': []},
+                    'attempt_key': f'acl-node-{index}', 'delivery_mode': 'bot',
+                }
+                if allowed:
+                    result = await self.adapter.send_message(
+                        root.thread, ContentDocument(f'python-{index}'),
+                        reply_to=parent, presentation=DeliveryPresentation('bot'),
+                        attempt=attempt,
+                    )
+                    self.assertEqual(result.message.external_container_id, 'thread-9')
+                    self.assertEqual((await self.rpc.call('send_message', args))['container_id'],
+                                     'thread-9')
+                    expected = before + 2
+                else:
+                    with self.assertRaises(PlatformOperationError) as python_rejected:
+                        await self.adapter.send_message(
+                            root.thread, ContentDocument(f'python-{index}'),
+                            reply_to=parent, presentation=DeliveryPresentation('bot'),
+                            attempt=attempt,
+                        )
+                    self.assertEqual(python_rejected.exception.reason, 'forbidden')
+                    with self.assertRaises(PlatformOperationError) as node_rejected:
+                        await self.rpc.call('send_message', args)
+                    self.assertEqual(node_rejected.exception.reason, 'forbidden')
+                    expected = before
+                records = [json.loads(line)['sdk_send']
+                           for line in self.effects.read_text().splitlines()
+                           if 'sdk_send' in json.loads(line)]
+                self.assertEqual(len(records), expected)
+                if allowed:
+                    self.assertEqual(records[-2]['options']['replyTo']['messageId'],
+                                     parent.external_message_id)
+
+    async def test_health_agrees_with_python_canonical_origin_only(self) -> None:
+        """Canonical case/default-port spellings match; a different origin cannot attest."""
+        from src.fluxer_connector_config import parse_fluxer_connectors
+        base = {'connector_key': 'fx-forum', 'rpc_url': self.rpc._config.rpc_url,
+                'transport_secret': 'shared-ipc-secret'}
+        with self.assertRaises(ValueError):
+            parse_fluxer_connectors(json.dumps([{**base, 'origin': 'https://fx.test.'}]))
+        for raw, ready in (('https://FX.test:443', True),
+                           ('https://other.test', False)):
+            with self.subTest(origin=raw):
+                cfg, = parse_fluxer_connectors(json.dumps([{**base, 'origin': raw}]))
+                rpc = FluxerRpcClient(cfg)
+                try:
+                    adapter = FluxerAdapter(connector_key='fx-forum',
+                                            instance_origin=cfg.origin, rpc=rpc)
+                    self.assertEqual(await adapter.refresh_readiness(), ready)
+                finally:
+                    await rpc.close()
 
     async def test_lost_reply_response_never_reposts(self) -> None:
         """A lost reply ACK retains uncertain delivery without a second SDK send."""
