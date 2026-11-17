@@ -24,6 +24,14 @@ map; SDK v3.3.0 otherwise fills absent values with hosted defaults. SDK REST
 uses its standard Undici Agent under the new *operator-trusted* threat model;
 this **does not** provide a per-socket SSRF or DNS-rebinding defense.
 
+Production `FLUXER_VERIFIED_WRITE_CONTRACT` defaults to `false`: effectful
+RPC operations are rejected and write capability flags remain false before
+real-server acceptance. With an explicitly verified test deployment, the
+production capability response requires both fresh channel/tag facts and
+current action-specific bot ACL. The executor independently checks the exact
+message owner/permissions at write time; neither a capability response nor
+an operator flag substitutes for verified live REST/Gateway readbacks.
+
 The entrypoint additionally exposes a conservative `capabilities` RPC. For
 forums, it reads the exact current channel through SDK `channels.fetch` and
 then via SDK REST `get(Routes.channel(id))`; this second read avoids accepting
@@ -111,25 +119,23 @@ authority. The first attested ID remains the expected connector
 identity across sidecar restarts; a mismatch refuses mutation. Absent health,
 foreign bot or webhook provenance never authorizes Edit/Delete. Tests use a
 Node sidecar with a real SDK session lifecycle and private RPC and a stateful
-SDK-edge fake, including a SQLite mutation CAS/receipt scenario; live
-The physical SDK mutation methods are now exercised through the same RPC
-listener by `message_mutations.ts`, but the pinned SDK and real server remain
-unverified and production writes are still disabled.
+SDK-edge fake, including a SQLite mutation CAS/receipt scenario. The physical SDK mutation methods
+are exercised through the same RPC listener by `message_mutations.ts`;
+real-server acceptance is still outstanding and production writes default off.
 
 `permissions.ts` separately implements the `check_permissions` RPC operation
 using `GuildMember.permissionsIn(channel)` and fresh SDK guild/member/role
-reads. It confirms only view, read-history and send-message flags; forum
-creation, thread creation and message-specific edit/delete stay `unknown`
-until their separate API/ownership conditions are verified. Missing or
-inconsistent roles, a foreign bot or mismatched guild never grant rights.
-The standalone Node SDK factory and entrypoint are now implemented but require
-installation of the actual SDK for TypeScript and live compatibility checks.
-The remaining REST operations are still missing.
+reads. It checks forum-create `SEND_MESSAGES`, thread-send bit 38, and
+read-history/view prerequisites for bot-owned edit/delete. A concrete message's
+ownership remains the executor's responsibility; unsupported message-root
+thread creation is still `unknown`. Missing or inconsistent roles, a foreign
+bot or mismatched guild never grant rights. The standalone Node SDK factory
+and entrypoint remain subject to published SDK type checks and live acceptance.
 
 The npm dependency is pinned as `@fluxerjs/core@3.3.0` in `package.json`, but
-npm registry DNS was unavailable during this implementation pass. There is
-**no verified `package-lock.json`, installed SDK type check, or real-instance
-Gateway acceptance result**. `npm test` uses deterministic SDK-model-shaped
+the committed lockfile is checked in CI. This isolated review environment
+cannot install the SDK, so TypeScript checking and real-instance Gateway
+acceptance remain unverified here. `npm test` uses deterministic SDK-model-shaped
 fixtures, local HTTP, and Node's type stripping. `npm run check` requires
 installing dependencies and checking the actual published types. The source
 contracts were independently inspected at the upstream `v3.3.0` Git tag;
@@ -174,9 +180,9 @@ the surrounding thread. A lost SDK response or mismatched edit result is
 `unknown_delivery`, not proof of a completed canonical revision. Definitive
 SDK HTTP status codes (400/401/403/404/429) are classified separately.
 The Node RPC tests and the two-process Python/Node/SQLite scenario use this
-same executor with a stateful fake SDK edge. `main.ts` intentionally leaves
-mutation RPCs unsupported until a pinned real Fluxer build, actual SDK
-installation and the runtime/deployment acceptance gates have passed.
+same executor with a stateful fake SDK edge. `main.ts` routes mutations only
+when `FLUXER_VERIFIED_WRITE_CONTRACT=true`; otherwise direct production writes
+and capability flags remain disabled until real-server acceptance.
 
 ## Compose packaging status
 

@@ -67,6 +67,7 @@ function readConfig(): {
 export function createProductionRpcHandler(
   client: Client,
   routes: {channel(id: string): string; channelThreads(id: string): string},
+  options: {writeContractVerified?: boolean} = {},
 ): RpcHandler {
   const reads = createSdkReadHandler(client);
   const permissions = createSdkPermissionHandler(client);
@@ -74,11 +75,53 @@ export function createProductionRpcHandler(
   const forum = createSdkForumCreateHandler(client, routes.channel, routes.channelThreads);
   const send = createSdkMessageSendHandler(client);
   const mutate = createSdkMessageMutationHandler(client);
-  return (operation, args) => {
+  return async (operation, args) => {
     if (operation === 'fetch_channel' || operation === 'fetch_thread' ||
         operation === 'fetch_message') return reads(operation, args);
     if (operation === 'check_permissions') return permissions(operation, args);
-    if (operation === 'capabilities') return capabilities(operation, args);
+    if (operation === 'capabilities') {
+      const metadata = await capabilities(operation, args);
+      // A verified channel kind/tag snapshot is necessary but insufficient:
+      // the current bot's ACL may already have been revoked. Contract evidence
+      // is an independent operator-controlled live acceptance gate.
+      const disabled = {forum_posts: false, thread_replies: false,
+        message_edit_delete: false};
+      if (!options.writeContractVerified || client.user?.bot !== true ||
+          !client.user.id || typeof metadata.channel_id !== 'string') {
+        return {...metadata, ...disabled};
+      }
+      const requested: string[] = [];
+      if (metadata.forum_posts === true) requested.push('create_forum_post');
+      if (metadata.thread_replies === true) requested.push('send_message');
+      if (metadata.message_edit_delete === true) {
+        requested.push('edit_message', 'delete_message');
+      }
+      if (!requested.length) return {...metadata, ...disabled};
+      const access = await permissions('check_permissions', {
+        bot_id: client.user.id, channel_id: metadata.channel_id, actions: requested,
+      });
+      if (access.channel_id !== metadata.channel_id ||
+          access.guild_id !== metadata.guild_id ||
+          access.bot_id !== client.user.id) return {...metadata, ...disabled};
+      const eligibleTags = metadata.requires_tag !== true ||
+        (Array.isArray(metadata.available_tags) &&
+          metadata.available_tags.some((tag: {moderated: boolean}) => tag.moderated === false));
+      return {...metadata,
+        forum_posts: metadata.forum_posts === true && eligibleTags &&
+          access.create_forum_post === 'allowed',
+        thread_replies: metadata.thread_replies === true &&
+          access.send_message === 'allowed',
+        message_edit_delete: metadata.message_edit_delete === true &&
+          access.edit_message === 'allowed' && access.delete_message === 'allowed',
+      };
+    }
+    // Direct private RPC callers cannot bypass the same server-build evidence
+    // gate that is used for capability advertisement. The SDK executors still
+    // enforce fresh ACL and ownership after this admission check.
+    if (['create_forum_thread', 'send_message', 'edit_message', 'delete_message']
+        .includes(operation) && !options.writeContractVerified) {
+      throw new PrivateRpcError('unsupported');
+    }
     if (operation === 'create_forum_thread') return forum(operation, args);
     if (operation === 'send_message') return send(operation, args);
     if (operation === 'edit_message' || operation === 'delete_message') {
@@ -119,7 +162,11 @@ export async function runFluxerNodeService(): Promise<void> {
       const {Client, Routes} = await import('@fluxerjs/core');
       const client = createTrustedSdkClient(discovery, Client,
         config.allowInsecureLocalDevelopment);
-      handler = createProductionRpcHandler(client, Routes);
+      // Remain fail-closed on a new deployment until an isolated real-server
+      // acceptance has been recorded for its exact SDK/server build.
+      handler = createProductionRpcHandler(client, Routes, {
+        writeContractVerified: process.env.FLUXER_VERIFIED_WRITE_CONTRACT === 'true',
+      });
       return client;
     },
     execute: (operation, args) => {

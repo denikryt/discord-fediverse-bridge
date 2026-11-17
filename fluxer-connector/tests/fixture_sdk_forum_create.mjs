@@ -83,7 +83,7 @@ const client={on:emitter.on.bind(emitter),off:emitter.off.bind(emitter),
 const execute=createProductionRpcHandler(client, {
   channel:id=>`/channels/${id}`,
   channelThreads:id=>`/channels/${id}/threads`,
-});
+}, {writeContractVerified:true});
 const service=new FluxerNodeService({connectorKey:'fx-forum',origin:'https://fx.test',
   apiPublic:'https://api.fx.test/',botToken:'node-only-secret',
   transportSecret:'shared-ipc-secret',

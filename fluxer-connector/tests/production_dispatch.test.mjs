@@ -10,14 +10,18 @@ import {createProductionRpcHandler} from '../src/main.ts';
 function provider() {
   const writes=[];
   const saved=new Map();
-  const acl={has:(flag)=>['ViewChannel','ReadMessageHistory','SendMessages'].includes(flag) ||
-    flag === (1n << 38n)};
+  const state={allow:true,threadBit:true,rolesKnown:true,closed:false,
+    requiresTag:false,tags:[]};
+  const acl={has:(flag)=>state.allow && (
+    ['ViewChannel','ReadMessageHistory','SendMessages'].includes(flag) ||
+      (flag === (1n << 38n) && state.threadBit))};
   const member={id:'bot-1',guild:{id:'guild-1'},roles:{roleIds:['writer']},
     permissionsIn:()=>acl};
-  const guild={id:'guild-1',fetchRoles:async()=>[{id:'guild-1'},{id:'writer'}],
+  const guild={id:'guild-1',fetchRoles:async()=>(state.rolesKnown ?
+    [{id:'guild-1'},{id:'writer'}] : []),
     members:{fetch:async()=>member}};
   const channel=(id)=>({id,guildId:'guild-1',type:id==='forum-1'?15:11,
-    parentId:id==='thread-1'?'forum-1':null,archived:false,locked:false,
+    parentId:id==='thread-1'?'forum-1':null,archived:state.closed,locked:state.closed,
     isGuild:()=>true,isForum:()=>id==='forum-1',isThread:()=>id==='thread-1',
     isText:()=>false,isAnnouncement:()=>false});
   const wireMessage=(id,container,body)=>({id,channelId:container,guildId:'guild-1',
@@ -33,22 +37,23 @@ function provider() {
         item.messageReference=options.replyTo?{
           channelId:container,messageId:options.replyTo.messageId,guildId:'guild-1'}:null;
         saved.set(`${container}/message-2`,item);return item;}},
-    rest:{get:async()=>({id:'forum-1',guild_id:'guild-1',type:15,flags:0,available_tags:[]}),
+    rest:{get:async()=>({id:'forum-1',guild_id:'guild-1',type:15,
+      flags:state.requiresTag?16:0,available_tags:state.tags}),
       post:async(route,options)=>{writes.push(['create',route]);return {
         id:'thread-3',parent_id:'forum-1',guild_id:'guild-1',type:11,
         message:{id:'starter-3',channel_id:'thread-3',content:options.body.message.content,
           author:{id:'bot-1',bot:true},webhook_id:null}};}},
   };
-  return {client,writes};
+  return {client,writes,state};
 }
 
 const route={channel:(id)=>`/channels/${id}`,channelThreads:(id)=>`/channels/${id}/threads`};
 
 /** Submit to a real authenticated private listener using the main dispatcher. */
-async function fixture() {
+async function fixture({verified=true}={}) {
   const state=provider();
   const service=new PrivateRpcService({connectorKey:'fx',transportSecret:'bearer-secret',
-    handler:createProductionRpcHandler(state.client,route)});
+    handler:createProductionRpcHandler(state.client,route,{writeContractVerified:verified})});
   const port=await service.start();
   const call=async(operation,args)=>{
     const response=await fetch(`http://127.0.0.1:${port}/rpc`,{method:'POST',
@@ -105,5 +110,76 @@ test('closed or unverified thread never advertises writable reply capability',as
     assert.equal(caps.body.result.thread_replies,true);
     assert.equal(caps.body.result.message_edit_delete,true);
     assert.equal(caps.body.result.forum_posts,false);
+  }finally{await h.close();}
+});
+
+/** A production capability flag must track current ACL, never stale channel type. */
+test('production capability revocation and restoration are action specific',async()=>{
+  const h=await fixture();
+  try {
+    for (const [allow,expected] of [[true,true],[false,false],[true,true]]) {
+      h.state.allow=allow;
+      const rights=await h.call('check_permissions',{bot_id:'bot-1',
+        channel_id:'forum-1',actions:['create_forum_post']});
+      assert.equal(rights.body.result.create_forum_post,allow?'allowed':'denied');
+      const caps=await h.call('capabilities',{channel_id:'forum-1'});
+      assert.equal(caps.body.result.forum_posts,expected);
+      const thread=await h.call('capabilities',{channel_id:'thread-1'});
+      assert.equal(thread.body.result.thread_replies,expected);
+      assert.equal(thread.body.result.message_edit_delete,expected);
+    }
+    h.state.allow=false;
+    const result=await h.call('create_forum_thread',{forum_id:'forum-1',guild_id:'guild-1',
+      title:'Topic',content:{body:'Body',format:'plain'},allowed_mentions:{parse:[]},
+      attempt_key:'create-denied',delivery_mode:'bot',applied_tags:[]});
+    assert.notEqual(result.status,200);
+    assert.deepEqual(h.writes,[]);
+    h.state.allow=true;
+    h.state.threadBit=false;
+    assert.equal((await h.call('capabilities',{channel_id:'thread-1'}))
+      .body.result.thread_replies,false);
+  }finally{await h.close();}
+});
+
+/** Metadata/ACL fakes cannot enable an unverified provider-build contract. */
+test('production write flags and physical dispatcher stay disabled before acceptance',async()=>{
+  const h=await fixture({verified:false});
+  try {
+    const caps=await h.call('capabilities',{channel_id:'forum-1'});
+    assert.equal(caps.status,200);
+    assert.equal(caps.body.result.tag_requirements_verified,true);
+    assert.equal(caps.body.result.forum_posts,false);
+    const thread=await h.call('capabilities',{channel_id:'thread-1'});
+    assert.equal(thread.body.result.thread_replies,false);
+    assert.equal(thread.body.result.message_edit_delete,false);
+    const denied=await h.call('create_forum_thread',{forum_id:'forum-1'});
+    assert.equal(denied.status,422);
+    assert.deepEqual(h.writes,[]);
+  }finally{await h.close();}
+});
+
+/** Unknown ACL, closed threads and unselectable required tags are not writable. */
+test('production flags refuse uncertain roles, closed threads and required moderated tags',async()=>{
+  const h=await fixture();
+  try {
+    h.state.rolesKnown=false;
+    assert.equal((await h.call('capabilities',{channel_id:'forum-1'}))
+      .body.result.forum_posts,false);
+    assert.equal((await h.call('capabilities',{channel_id:'thread-1'}))
+      .body.result.message_edit_delete,false);
+    h.state.rolesKnown=true;
+    h.state.closed=true;
+    assert.equal((await h.call('capabilities',{channel_id:'thread-1'}))
+      .body.result.thread_replies,false);
+    h.state.closed=false;
+    h.state.requiresTag=true;
+    h.state.tags=[{id:'moderated-tag',moderated:true}];
+    const blocked=await h.call('capabilities',{channel_id:'forum-1'});
+    assert.equal(blocked.body.result.tag_requirements_verified,true);
+    assert.equal(blocked.body.result.forum_posts,false);
+    h.state.tags=[{id:'open-tag',moderated:false}];
+    assert.equal((await h.call('capabilities',{channel_id:'forum-1'}))
+      .body.result.forum_posts,true);
+    assert.deepEqual(h.writes,[]);
   }finally{await h.close();}
 });

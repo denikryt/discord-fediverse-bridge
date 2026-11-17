@@ -127,6 +127,8 @@ FLUXER_ORIGIN=https://trusted.example
 FLUXER_APPROVED_API_HOST=api.trusted.example
 FLUXER_APPROVED_GATEWAY_HOST=gateway.trusted.example
 FLUXER_INTERNAL_BEARER=same-internal-bearer
+# Default OFF; opt in only on a dedicated server-build acceptance instance.
+FLUXER_VERIFIED_WRITE_CONTRACT=false
 FLUXER_BOT_TOKEN_PATH=./secrets/fluxer-bot-token
 ```
 
@@ -159,6 +161,14 @@ Stop in reverse ownership order through Compose (`fluxer-sidecar` depends on
 container runtime behavior requires a real two-container test. A port collision
 at `127.0.0.1:8769` prevents Node startup rather than routing elsewhere.
 Do **not** run two independent sidecars for one configured connector.
+
+**Write acceptance gate:** Node's production write RPCs and positive write
+capabilities default to disabled. Before enabling them, record the tested
+Fluxer server build, SDK version and forum/tag/ACL/receipt readback results on
+an isolated instance. Set `FLUXER_VERIFIED_WRITE_CONTRACT=true` only in that
+instance's environment for the controlled write/denial trials, and do not
+enable unaccepted builds. This flag never skips SDK-owned checks, fresh
+permission evaluation, bot identity admission or SQLite delivery claims.
 
 **Current acceptance blockers:** no Docker runtime was available locally for
 B20/B21, and no pinned real Fluxer build/credentials were provided. The SDK
