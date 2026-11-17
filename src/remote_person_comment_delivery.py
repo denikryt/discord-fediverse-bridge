@@ -242,16 +242,22 @@ class RemotePersonCommentDeliveryWorker:
                 row.claim_token = None
                 row.last_error = 'assignment removed before Discord send authorization'
                 return False
+            # Pin the exact revision submitted to Discord before the network
+            # boundary. A newer authenticated Update can arrive while the POST
+            # is uncertain; reconciliation must not acknowledge that Update.
+            row.last_applied_revision = claim.revision
             row.state = 'sending'
             return True
 
     def _complete(self, claim: CommentDispatch, message_id: int) -> None:
-        """Commit Discord ID after confirmed send to prevent duplicate creates."""
+        """Commit Discord ID without advancing past the originally submitted revision."""
         with self.database.immediate_session() as session:
             row = session.get(RemotePersonCommentPlacement, claim.placement_id)
             if row is not None and row.state in ('sending', 'uncertain'):
                 row.discord_message_id = int(message_id)
-                row.last_applied_revision = claim.revision
+                # The attempted revision was persisted at sending authorization.
+                # Older uncertain rows may have no snapshot: retaining None
+                # forces a safe edit to the latest content after reconciliation.
                 row.state = 'delivered'
                 row.claim_token = None
                 row.last_error = None
@@ -277,6 +283,10 @@ class RemotePersonCommentDeliveryWorker:
                 row.next_attempt_at = utcnow() + timedelta(seconds=20 * row.attempt_count)
             else:
                 row.state = 'uncertain'
+            if row.state != 'uncertain':
+                # A proven-unsent attempt has no applied revision; the next
+                # authorized send must pin its own fresh canonical snapshot.
+                row.last_applied_revision = None
             row.claim_token = None
             row.last_error = str(error)[:500]
 
@@ -376,7 +386,9 @@ class RemotePersonCommentDeliveryWorker:
                     thread_id=row.destination_thread_id, root_actor_id=root.remote_actor_id,
                     object_id=canonical.object_id, body=(getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''),
                     actor_name=getattr(canonical, 'actor_name', None) or getattr(canonical, 'actor_username', None) or 'Remote user',
-                    parent_message_id=None, revision=canonical.revision_fingerprint)
+                    # Reconciliation identifies the submitted message, not the
+                    # current canonical revision; preserve the send-time proof.
+                    parent_message_id=None, revision=row.last_applied_revision or '')
             try:
                 found = await self.transport.find_uncertain(claim)
             except asyncio.CancelledError:

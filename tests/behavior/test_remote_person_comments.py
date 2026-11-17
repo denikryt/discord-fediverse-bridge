@@ -189,6 +189,53 @@ class RemotePersonComments(unittest.TestCase):
         """A-origin User Actor Note is mirrored as bot in B, never republished."""
         self._assert_local_reply_mirroring()
 
+    def test_uncertain_remote_comment_recovers_sent_revision_then_edits_to_update(self):
+        """A timed-out v1 bot POST must not acknowledge a later canonical v2 Update."""
+        self.deliver_roots()
+        self.assertEqual(self.comments.reserve(self.event()).targets, 2)
+        worker, edge = self.worker(timeout=True)
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.calls), 2)
+        sent_revision = edge.calls[0].revision
+        with self.db.session() as session:
+            self.assertEqual({row.state for row in session.scalars(
+                select(RemotePersonCommentPlacement))}, {'uncertain'})
+        update = self.event(operation='updated', when=self.when + timedelta(minutes=1))
+        update.source_activity_json['object']['content'] = 'Updated v2'
+        update.object.body_markdown = 'Updated v2'
+        self.assertEqual(self.comments.reserve(update).status, 'updated')
+        with self.db.session() as session:
+            canonical = session.scalar(select(InboundConversationObject))
+            self.assertNotEqual(canonical.revision_fingerprint, sent_revision)
+            newer_revision = canonical.revision_fingerprint
+        # Missing history proof must neither retry the POST nor mark v2 sent.
+        worker.recover()
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.calls), 2)
+        self.assertEqual(edge.edits, [])
+        with self.db.session() as session:
+            self.assertEqual({row.last_applied_revision for row in session.scalars(
+                select(RemotePersonCommentPlacement))}, {sent_revision})
+        async def found_in_history(claim):
+            """Discord accepted v1 despite losing the POST response."""
+            return claim.channel_id * 10000 + 99
+        edge.find_uncertain = found_in_history
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.calls), 2)  # no repeated POSTs
+        self.assertEqual(len(edge.edits), 2)
+        self.assertTrue(all('Updated v2' in content for _, _, content in edge.edits))
+        with self.db.session() as session:
+            placements = session.scalars(select(RemotePersonCommentPlacement)).all()
+            self.assertEqual({row.state for row in placements}, {'delivered'})
+            self.assertEqual({row.last_applied_revision for row in placements}, {newer_revision})
+            self.assertTrue(all(row.discord_message_id is not None for row in placements))
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.edits), 2)
+
+    def test_uncertain_local_mirror_reconciles_without_blocking_other_comments(self):
+        """A timed-out local mirror is found once and does not stop unrelated deliveries."""
+        self._assert_local_reply_mirroring(uncertain_mirror=True)
+
     def test_local_mirror_waits_for_an_undelivered_webhook_root(self):
         """A pending root in B retains A's reply until B is sent and threaded."""
         self._assert_local_reply_mirroring(pending_root=True)
@@ -198,7 +245,8 @@ class RemotePersonComments(unittest.TestCase):
         self._assert_local_reply_mirroring(pending_root=True, unbind_before_delivery=True)
 
     def _assert_local_reply_mirroring(self, *, pending_root=False,
-                                     unbind_before_delivery=False):
+                                     unbind_before_delivery=False,
+                                     uncertain_mirror=False):
         """Run canonical publish and native parent resolution across two copies."""
         self.deliver_roots()
         with self.db.immediate_session() as session:
@@ -327,6 +375,47 @@ class RemotePersonComments(unittest.TestCase):
                     RemotePersonPostDelivery.discord_channel_id == 101))
                 delayed.discord_thread_id = 80101
         worker, edge = self.worker()
+        if uncertain_mirror:
+            # A different inbound comment must still be sent on both copies,
+            # even when this published local mirror becomes uncertain.
+            self.assertEqual(self.comments.reserve(self.event()).targets, 2)
+            original_send = edge.send
+            async def timed_out_mirror(claim):
+                """Only the locally published mirror times out after Discord accepts it."""
+                if claim.object_id == first.object_id:
+                    edge.calls.append(claim)
+                    # The canonical local Note advances after the v1 POST but
+                    # before reconciliation discovers its Discord message.
+                    with self.db.immediate_session() as session:
+                        published = session.scalar(select(PublishedActivityObject).where(
+                            PublishedActivityObject.object_id == first.object_id))
+                        published.content_revision += 1
+                        published.body_markdown = 'This is Alice v2'
+                    raise TimeoutError('mirror response lost after Discord accepted it')
+                return await original_send(claim)
+            async def find_mirror(claim):
+                """Return the exact pre-existing bot mirror from thread history."""
+                self.assertEqual(claim.object_id, first.object_id)
+                return 910101
+            edge.send = timed_out_mirror
+            edge.find_uncertain = find_mirror
+            asyncio.run(worker.drain_once())
+            self.assertEqual(len(edge.calls), 3)
+            self.assertEqual(len(edge.edits), 1)
+            self.assertIn('This is Alice v2', edge.edits[0][2])
+            with self.db.session() as session:
+                mirror = session.scalar(select(RemotePersonCommentPlacement).where(
+                    RemotePersonCommentPlacement.published_object_id.is_not(None)))
+                published = session.get(PublishedActivityObject, mirror.published_object_id)
+                self.assertEqual(mirror.state, 'delivered')
+                self.assertEqual(mirror.discord_message_id, 910101)
+                self.assertEqual(mirror.last_applied_revision, f'published:{published.content_revision}')
+                self.assertEqual(len(session.scalars(select(RemotePersonCommentPlacement).where(
+                    RemotePersonCommentPlacement.inbound_object_id.is_not(None),
+                    RemotePersonCommentPlacement.state == 'delivered')).all()), 2)
+            asyncio.run(worker.drain_once())
+            self.assertEqual(len(edge.calls), 3)  # neither mirror nor comments re-sent
+            return
         asyncio.run(worker.drain_once())
         self.assertEqual(len(edge.calls), 1)
         asyncio.run(worker.drain_once())
@@ -515,6 +604,8 @@ class RemotePersonComments(unittest.TestCase):
             rows = list(session.scalars(select(RemotePersonCommentPlacement)))
             self.assertEqual({row.state for row in rows}, {'pending'})
             self.assertEqual({row.attempt_count for row in rows}, {1})
+            # A proven-unsent attempt must not leave a false applied revision.
+            self.assertTrue(all(row.last_applied_revision is None for row in rows))
             self.assertTrue(all(row.next_attempt_at is not None for row in rows))
         # Make due and exhaust bounded failures without any ambiguous send.
         for _ in range(2):
