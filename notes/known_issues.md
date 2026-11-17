@@ -1,3 +1,18 @@
+## Full re-verification D1–D4 (2026-11-17)
+
+- D1 fixed locally: `ThreadRef` send authorization is tied to the physical
+  thread (bit 38, history and visibility) rather than parent forum SendMessages.
+  Cross-process SDK-boundary regression covers successful nested replies,
+  independent parent-permission revoke and thread-permission revoke.
+- D2 fixed locally: `discord-primary` cannot be a Fluxer connector key in
+  Python settings, SQLite preflight or Node startup. No migration on refusal.
+- D3 fixed locally: trailing-DNS-dot origins are rejected on both transports;
+  canonical case/default-port spellings continue to work.
+- D4 fixed locally: Python rejects IPC bearer lengths below Node's eight-character
+  minimum before opening DB/actor keys.
+- S19 remains open: real Fluxer REST/Gateway and Docker isolation acceptance,
+  and complete dependency-backed Python/Node/typecheck runs are external gates.
+
 ## Fluxer-only implementation review (#12, 2026-11-17)
 
 - F1 locally fixed and extended after re-review: pre-migration check now also refuses legacy source_*_id Discord projections in canonical thread/message groups, even with NULL connector/surface; real Fluxer build_runtime refuses before migration and preserves original SQLite bytes.

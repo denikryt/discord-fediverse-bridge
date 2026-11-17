@@ -75,3 +75,36 @@ The new dependency-contract test checks the Python package requirement,
 locked version and Docker install path. Existing positive/negative runtime
 settings tests continue to exercise selector validation and a one-shot FIFO.
 This change does **not** provide live Fluxer or Docker S19 acceptance.
+
+## Full re-verification D1–D4 (2026-11-17)
+
+The independent full re-verification of `9943786` found four concrete
+contract gaps; the fixes below are made on a dedicated successor branch.
+
+- **D1 / S10:** ThreadRef writes now preflight the verified *thread* ID for
+  `thread_replies`, `view_channel`, `read_history` and `send_message`, and check
+  parent visibility separately. They do not require `SendMessages` in the
+  parent forum. The Node SDK executor still independently enforces bit 38 and
+  checks the exact immediate reply parent. A cross-process matrix revokes
+  forum `SendMessages` and thread bit 38 independently; allowed nested replies
+  and forbidden writes have observable SDK-boundary counts.
+- **D2 / S03–S04:** The reserved `discord-primary` key is refused by Python
+  connector settings, read-only pre-migration admission and Node startup.
+  Both an existing empty SQLite file and an inert current-v1 SQLite database
+  remain byte-identical after direct preflight refusal.
+- **D3 / S03–S07:** Final-dot DNS origins are refused at Python connector
+  admission and Node `validateOrigin()` before SDK login. Canonical mixed-case
+  and default HTTPS port spellings still normalize to the same instance;
+  mismatched origins cannot attest SDK readiness.
+- **D4 / S03–S06:** Python settings reject a private IPC bearer shorter than
+  eight characters, matching Node startup. Neither the credential nor the
+  rejected raw JSON is included in error text.
+
+Tests use actual Python adapter / authenticated Node RPC / SQLite entry points
+and an SDK-boundary fake, not a live Fluxer server. The local regression run
+completed **87 Python tests** and **34 targeted Node tests** (recounted in
+release log). The full available Node suite loaded 121 tests and reported two
+files unable to load because `@fluxerjs/core` is absent. Full `pytest` cannot
+load its `hypothesis` dependency, and TypeScript typecheck cannot find Node
+types in this environment. These are **not** proof of S19 acceptance. Actual
+Fluxer REST/Gateway and Docker deployments still require external verification.
