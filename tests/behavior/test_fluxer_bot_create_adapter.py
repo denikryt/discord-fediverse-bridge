@@ -147,6 +147,31 @@ class FluxerBotCreateScenarios(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 1)
         self.assertEqual(len(self.provider.remote_threads), 1)
 
+    async def test_capability_scope_mismatch_refuses_before_tag_policy(self):
+        """A foreign forum/guild snapshot must fail before checking tag details or posting."""
+        original = self.provider.handle
+        for field, foreign in (('channel_id', 'foreign-forum'), ('guild_id', 'foreign-guild')):
+            async def contradict_scope(request):
+                """Simulate one provider snapshot claiming a different forum owner."""
+                response = await original(request)
+                if json.loads(request.content)['operation'] == 'capabilities':
+                    body = json.loads(response.content)
+                    body['result'][field] = foreign
+                    # The provenance refusal must take precedence over an
+                    # invalid tag policy in the same untrusted response.
+                    body['result']['tag_requirements_verified'] = False
+                    return httpx.Response(200, json=body)
+                return response
+
+            with self.subTest(field=field):
+                self.rpc._http._transport = httpx.MockTransport(contradict_scope)
+                with self.assertRaises(PlatformOperationError) as caught:
+                    await self.create()
+                self.assertEqual(caught.exception.reason, 'unsupported')
+                self.assertIn('forum posts not verified', str(caught.exception))
+                self.assertEqual(len(self.provider.remote_threads), 0)
+        self.rpc._http._transport = httpx.MockTransport(original)
+
     async def test_reserved_create_requires_valid_one_use_permit(self):
         """No bare fanout key or stolen permit authorizes another remote POST."""
         attempt = self.forum_attempt('fanout:v1:local:post:20:fluxer-test:7')

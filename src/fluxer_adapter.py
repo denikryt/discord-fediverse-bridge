@@ -344,11 +344,10 @@ class FluxerAdapter:
                 or tags.get('guild_id') != verified.external_guild_id
                 or tags.get('forum_posts') is not True):
                 raise PlatformOperationError('unsupported', 'forum posts not verified on Fluxer build')
-            # Required tags must be measured on this instance. A boolean forum
-            # capability alone does not prove an untagged create will succeed.
-            if (tags.get('channel_id') != verified.external_channel_id
-                or tags.get('guild_id') != verified.external_guild_id
-                or tags.get('tag_requirements_verified') is not True
+            # Channel/guild scope was verified above against this same snapshot.
+            # Tag policy is independently required: a forum flag alone cannot
+            # prove whether an untagged Create is permitted on this server.
+            if (tags.get('tag_requirements_verified') is not True
                 or type(tags.get('requires_tag')) is not bool
                 or not isinstance(tags.get('available_tags'), list)):
                 raise PlatformOperationError('unsupported', 'Fluxer forum tag requirements unverified')
