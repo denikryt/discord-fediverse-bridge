@@ -133,6 +133,69 @@ def preflight_instance_mode(
                     "WHERE c.connector_key='discord-primary' LIMIT 1"
                 ).first():
                     raise RuntimeError("Fluxer mode refuses Discord-owned channel surfaces")
+                # A surface is optional on older source rows. Inspect every
+                # direct connector FK (source and physical copy) rather than
+                # assuming a non-NULL surface proves the origin. The v1 schema
+                # has already been validated; NULL legacy FKs are not evidence
+                # of Discord ownership and must remain allowed for AP data.
+                for table in sorted(names - {"platform_connectors"}):
+                    foreign_keys = connection.exec_driver_sql(
+                        f'PRAGMA foreign_key_list("{table}")'
+                    ).mappings().all()
+                    connector_columns = {
+                        row["from"] for row in foreign_keys
+                        if row["table"] == "platform_connectors"
+                    }
+                    for column in sorted(connector_columns):
+                        foreign_source = connection.exec_driver_sql(
+                            f'SELECT 1 FROM "{table}" AS record '
+                            f'JOIN platform_connectors AS connector '
+                            f'ON connector.id=record."{column}" '
+                            "WHERE connector.platform<>'fluxer' "
+                            "OR connector.connector_key<>? LIMIT 1",
+                            (connector_key,),
+                        ).first()
+                        if foreign_source:
+                            raise RuntimeError(
+                                f"Fluxer mode refuses Discord-owned {table} connector rows"
+                            )
+                # Temporary Discord integer projections must remain NULL in
+                # Fluxer-owned physical copies. A populated Discord ID is
+                # independent evidence even when the direct FK says Fluxer.
+                for table in sorted(names):
+                    columns = connection.exec_driver_sql(
+                        f'PRAGMA table_info("{table}")'
+                    ).mappings().all()
+                    projections = (
+                        row["name"] for row in columns
+                        if row["name"].startswith("discord_") and
+                        row["name"].endswith("_id")
+                    )
+                    for column in projections:
+                        if connection.exec_driver_sql(
+                            f'SELECT 1 FROM "{table}" WHERE "{column}" IS NOT NULL LIMIT 1'
+                        ).first():
+                            raise RuntimeError(
+                                f"Fluxer mode refuses Discord-owned {table} projection"
+                            )
+                # Connector provenance is redundant with source_platform for
+                # modern data, but can disagree in a valid migrated v1 row.
+                if connection.exec_driver_sql(
+                    "SELECT 1 FROM message_mappings WHERE source_platform='discord' LIMIT 1"
+                ).first():
+                    raise RuntimeError("Fluxer mode refuses Discord-owned message sources")
+                # These legacy fields can carry direct Discord authorship even
+                # without a connector FK. Ignore NULL projections on Fluxer
+                # copies; a populated Discord guild ID is affirmative provenance.
+                for table in ("message_mappings", "published_activity_objects"):
+                    if connection.exec_driver_sql(
+                        f'SELECT 1 FROM "{table}" WHERE discord_guild_id IS NOT NULL LIMIT 1'
+                    ).first():
+                        raise RuntimeError(f"Fluxer mode refuses Discord-owned {table} authorship")
+                if connection.exec_driver_sql(
+                    "SELECT 1 FROM guild_invite_publications LIMIT 1"
+                ).first():
+                    raise RuntimeError("Fluxer mode refuses Discord-owned invite publication")
     except sqlite3.DatabaseError as error:
         raise RuntimeError("Invalid database file for platform preflight") from error
     finally:

@@ -18,7 +18,7 @@ from src.config import Settings
 from src.db import Database
 from src.db.repositories.platform_surfaces import PlatformSurfaceRepository, preflight_instance_mode
 from src.actor_key_service import BridgeActorKeyBootstrap
-from src.models import PlatformConnector
+from src.models import PlatformConnector, PublishedActivityObject
 
 
 class FluxerSingleTrustedProvisioning(unittest.TestCase):
@@ -177,6 +177,155 @@ class FluxerPreMigrationOwnership(unittest.TestCase):
             self._preflight(origin='https://two.test')
         with self.assertRaisesRegex(RuntimeError, 'Fluxer-bound'):
             self._preflight(mode='discord')
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_bound_fluxer_refuses_surface_less_discord_mapping_before_migration(self) -> None:
+        """A valid legacy Discord source FK cannot hide behind a NULL channel surface."""
+        db = self._new_v1()
+        try:
+            with db.session() as session:
+                PlatformSurfaceRepository.admit_single_trusted_fluxer(
+                    session, connector_key='fx-one', instance_origin='https://one.test',
+                )
+                # This historically allowed shape passes real SQLite FK checks.
+                session.execute(__import__('sqlalchemy').text(
+                    "INSERT INTO message_mappings (source_connector_id,source_platform,source_id,"
+                    "activity_id,object_id,actor_url,publication_context,community_actor_url,created_at) "
+                    "VALUES ((SELECT id FROM platform_connectors WHERE connector_key='discord-primary'),"
+                    "'discord','source-1','https://ap.test/activities/1',"
+                    "'https://ap.test/objects/1','https://ap.test/actors/1','community',"
+                    "'https://ap.test/actors/groups/1',CURRENT_TIMESTAMP)"
+                ))
+            with db.engine.connect() as connection:
+                self.assertEqual(connection.exec_driver_sql('PRAGMA foreign_key_check').all(), [])
+        finally:
+            db.close()
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'Discord-owned'):
+            self._preflight()
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_bound_fluxer_allows_own_copy_but_preserves_actor_key_on_refusal(self) -> None:
+        """Exact Fluxer-source state is valid; a later foreign source preserves the AP key."""
+        db = self._new_v1()
+        try:
+            with db.session() as session:
+                PlatformSurfaceRepository.admit_single_trusted_fluxer(
+                    session, connector_key='fx-one', instance_origin='https://one.test',
+                )
+                session.execute(__import__('sqlalchemy').text(
+                    "INSERT INTO message_mappings (source_connector_id,source_platform,source_id,"
+                    "activity_id,object_id,actor_url,publication_context,community_actor_url,created_at) "
+                    "VALUES ((SELECT id FROM platform_connectors WHERE connector_key='fx-one'),"
+                    "'fluxer','source-1','https://ap.test/activities/1',"
+                    "'https://ap.test/objects/1','https://ap.test/actors/1','community',"
+                    "'https://ap.test/actors/groups/1',CURRENT_TIMESTAMP)"
+                ))
+            BridgeActorKeyBootstrap(database=db, settings=self.config).ensure()
+        finally:
+            db.close()
+        self._preflight()
+        db = Database(self.url)
+        try:
+            with db.session() as session:
+                session.execute(__import__('sqlalchemy').text(
+                    "INSERT INTO message_mappings (source_connector_id,source_platform,source_id,"
+                    "activity_id,object_id,actor_url,publication_context,community_actor_url,created_at) "
+                    "VALUES ((SELECT id FROM platform_connectors WHERE connector_key='discord-primary'),"
+                    "'discord','source-2','https://ap.test/activities/2',"
+                    "'https://ap.test/objects/2','https://ap.test/actors/1','community',"
+                    "'https://ap.test/actors/groups/1',CURRENT_TIMESTAMP)"
+                ))
+        finally:
+            db.close()
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'Discord-owned'):
+            self._preflight()
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_bound_fluxer_copy_requires_no_discord_integer_projection(self) -> None:
+        """A valid Fluxer physical target is allowed until it claims a Discord ID."""
+        from sqlalchemy import text
+
+        db = self._new_v1()
+        try:
+            with db.session() as session:
+                PlatformSurfaceRepository.admit_single_trusted_fluxer(
+                    session, connector_key='fx-one', instance_origin='https://one.test',
+                )
+                PlatformSurfaceRepository.ensure_channel(
+                    session, connector_key='fx-one', external_channel_id='forum-a',
+                    external_guild_id='guild-a', kind='forum',
+                )
+                session.execute(text(
+                    "INSERT INTO post_links (connector_id,channel_surface_id,external_thread_id,"
+                    "lemmy_post_id,direction,created_at) VALUES ("
+                    "(SELECT id FROM platform_connectors WHERE connector_key='fx-one'),"
+                    "(SELECT id FROM platform_channel_surfaces WHERE external_channel_id='forum-a'),"
+                    "'thread-a',7,'inbound',CURRENT_TIMESTAMP)"
+                ))
+        finally:
+            db.close()
+        self._preflight()
+        db = Database(self.url)
+        try:
+            with db.session() as session:
+                session.execute(text("UPDATE post_links SET discord_forum_thread_id=123"))
+        finally:
+            db.close()
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'Discord-owned'):
+            self._preflight()
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_bound_fluxer_refuses_discord_authored_object_without_surface(self) -> None:
+        """An authored object's direct source FK proves ownership without a surface."""
+        db = self._new_v1()
+        try:
+            with db.session() as session:
+                PlatformSurfaceRepository.admit_single_trusted_fluxer(
+                    session, connector_key='fx-one', instance_origin='https://one.test',
+                )
+                discord = session.scalar(select(PlatformConnector).where(
+                    PlatformConnector.connector_key == 'discord-primary',
+                ))
+                session.add(PublishedActivityObject(
+                    source_connector_id=discord.id,
+                    actor_username='author', actor_url='https://ap.test/actor/author',
+                    publication_context='community',
+                    community_actor_url='https://ap.test/groups/a',
+                    activity_id='https://ap.test/activities/a',
+                    object_id='https://ap.test/objects/a', kind='post',
+                    body_markdown='content',
+                ))
+        finally:
+            db.close()
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'Discord-owned'):
+            self._preflight()
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_bound_fluxer_rejects_discord_source_platform_even_with_fluxer_fk(self) -> None:
+        """Conflicting canonical source-platform metadata cannot authorize Fluxer."""
+        from sqlalchemy import text
+        db = self._new_v1()
+        try:
+            with db.session() as session:
+                PlatformSurfaceRepository.admit_single_trusted_fluxer(
+                    session, connector_key='fx-one', instance_origin='https://one.test',
+                )
+                session.execute(text(
+                    "INSERT INTO message_mappings (source_connector_id,source_platform,source_id,"
+                    "activity_id,object_id,actor_url,publication_context,community_actor_url,created_at) "
+                    "VALUES ((SELECT id FROM platform_connectors WHERE connector_key='fx-one'),"
+                    "'discord','source-1','https://ap.test/a/1','https://ap.test/o/1',"
+                    "'https://ap.test/users/1','community','https://ap.test/groups/1',CURRENT_TIMESTAMP)"
+                ))
+        finally:
+            db.close()
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'Discord-owned'):
+            self._preflight()
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_released_v0_refused_before_its_committing_migration(self) -> None:
