@@ -12,6 +12,9 @@ import os
 import json
 import signal
 import socket
+import subprocess
+import sys
+import threading
 import shutil
 import tempfile
 import unittest
@@ -110,6 +113,9 @@ class SettingsPlatformSourceContracts(unittest.TestCase):
             self.assertEqual(Settings(_env_file=None).bridge_platform, 'discord')
         with mock.patch.dict(os.environ, self._env(BrIdGe_PlAtFoRm='discord'), clear=True):
             self.assertEqual(Settings(_env_file=None).bridge_platform, 'discord')
+        with mock.patch.dict(os.environ, self._env(bridge_platform=''), clear=True):
+            with self.assertRaises(ValueError):
+                Settings(_env_file=None, _env_ignore_empty=True)
 
     def test_process_env_overrides_dotenv_and_init_overrides_both(self) -> None:
         """Use Pydantic Settings' normal init > env > .env ordering."""
@@ -126,6 +132,67 @@ class SettingsPlatformSourceContracts(unittest.TestCase):
                     Settings(_env_file=env_file)
                 self.assertEqual(Settings(_env_file=env_file, BRIDGE_PLATFORM='discord').bridge_platform,
                                  'discord')
+
+    def test_fifo_dotenv_is_consumed_once_for_valid_and_empty_platform(self) -> None:
+        """A single .env FIFO delivery must terminate; an empty selector fails promptly."""
+        # An extra read after Pydantic has loaded its source blocks forever
+        # when the operator pipes credentials once and closes the writer.
+        for selector in ('discord', ''):
+            with self.subTest(selector=selector), tempfile.TemporaryDirectory() as directory:
+                fifo = Path(directory) / 'bridge.env'
+                os.mkfifo(fifo)
+                process = subprocess.Popen(
+                    [sys.executable, '-c',
+                     'from src.config import Settings; '
+                     'print(Settings(_env_file=__import__("sys").argv[1]).bridge_platform)',
+                     str(fifo)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                    env={'PATH': os.environ.get('PATH', ''),
+                         'PYTHONPATH': str(Path(__file__).resolve().parents[2])},
+                )
+                delivered = []
+
+                def supply_once() -> None:
+                    """Supply exactly one env document to the FIFO reader."""
+                    with fifo.open('w', encoding='utf-8') as writer:
+                        writer.write(f'BRIDGE_PLATFORM={selector}\n'
+                                     'DISCORD_TOKEN=discord-test\n'
+                                     'BRIDGE_SUPER_ADMIN_USER_IDS=42\n'
+                                     'PUBLIC_BASE_URL=https://bridge.test\n'
+                                     'FEDIFY_SHARED_SECRET=secret\n')
+                    delivered.append(True)
+
+                writer = threading.Thread(target=supply_once, daemon=True)
+                writer.start()
+                try:
+                    stdout, stderr = process.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate()
+                    self.fail('Settings tried to read the one-shot FIFO a second time')
+                writer.join(timeout=2)
+                self.assertEqual(delivered, [True])
+                if selector:
+                    self.assertEqual(process.returncode, 0, stderr)
+                    self.assertEqual(stdout.strip(), 'discord')
+                else:
+                    self.assertNotEqual(process.returncode, 0)
+                    self.assertIn('BRIDGE_PLATFORM', stderr)
+
+    def test_empty_non_selector_in_later_dotenv_keeps_earlier_value(self) -> None:
+        """The existing ignore-empty contract applies per file to other fields."""
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / 'first.env'
+            last = Path(directory) / 'last.env'
+            first.write_text('BRIDGE_PLATFORM=discord\n'
+                             'DISCORD_TOKEN=discord-test\n'
+                             'BRIDGE_SUPER_ADMIN_USER_IDS=42\n'
+                             'PUBLIC_BASE_URL=https://bridge.test\n'
+                             'FEDIFY_SHARED_SECRET=secret\n', encoding='utf-8')
+            last.write_text('DISCORD_TOKEN=\n', encoding='utf-8')
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(Settings(_env_file=(first, last)).discord_token,
+                                 'discord-test')
 
     def test_last_dotenv_file_wins_even_if_its_selector_is_empty(self) -> None:
         """An empty final .env value cannot reveal an earlier valid default."""

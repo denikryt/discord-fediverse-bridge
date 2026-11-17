@@ -3,7 +3,7 @@
 - F1 locally fixed and extended after re-review: pre-migration check now also refuses legacy source_*_id Discord projections in canonical thread/message groups, even with NULL connector/surface; real Fluxer build_runtime refuses before migration and preserves original SQLite bytes.
 - F2 locally fixed and extended after re-review: thread_replies also requires read_history=allowed, matching the send executor; write-contract gate remains disabled by default pending real-server evidence.
 - F3 legacy fixtures now explicitly select Discord in all nine re-review-named modules, including the HTTP-only media runtime and direct User Actor Follow fixture. Local selected tests pass; the original 71 IDs/full suite could not be re-run without hypothesis/discord.py.
-- F4 uses the native Pydantic Settings source precedence and name normalization while retaining empty values only for BRIDGE_PLATFORM, including lowercase env and ordered .env files; F5 canonical Compose health comparison unchanged and locally verified.
+- F4 RR06: the earlier extra `empty_dotenv()` read blocked single-delivery FIFO configuration. Fixed with a single-pass dotenv source, preserving empty BRIDGE_PLATFORM and ignoring empty other values per file. FIFO and source-priority regressions pass; F5 canonical Compose health comparison remains unchanged.
 - S19 OPEN: real Fluxer REST/Gateway, Docker and full dependency-backed suites remain external acceptance gates.
 
 # Platform API (physical surface mapping contract)

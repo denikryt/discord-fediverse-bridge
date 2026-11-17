@@ -28,3 +28,28 @@ default. It is not evidence that a particular server build was tested. S19 must
 be executed in an external environment with lockfile dependencies, real Fluxer
 REST/Gateway writes/readbacks, authenticated reconnect, denied writes, actual
 Discord-only/Fluxer-only Compose deployments and secret/namespace inspections.
+
+## RR06 — one-pass dotenv source (2026-11-17)
+
+The independent RR01–RR05 review found that the `empty_dotenv()` overlay
+opened `.env` a second time after Pydantic had already consumed it. A FIFO
+carrying a single valid or empty `BRIDGE_PLATFORM` caused startup to block.
+
+`Settings` now substitutes one selective `DotEnvSettingsSource` at the normal
+dotenv priority while disabling the eager default source's file read. Each
+file is parsed exactly once. Per-file filtering retains an explicit empty
+`BRIDGE_PLATFORM` for validation while ignoring empty non-selector values
+before multi-file merge. Process environment case normalization and the
+`init > env > dotenv > file secrets` precedence remain Pydantic-owned.
+The implementation is validated against the locked `pydantic-settings 2.14.1`.
+
+`python -m pytest -q --noconftest tests/behavior/test_single_platform_runtime.py
+ tests/behavior/test_fluxer_single_trusted_provisioning.py
+ tests/behavior/test_fluxer_runtime_composition.py
+ tests/behavior/test_fluxer_compose_topology.py tests/test_fluxer_connector_config.py`
+completed with **54 passed, 1 skipped and 45 subtests passed**. The new FIFO
+subprocess regression tests supply credentials once, check both success and
+an immediate validation failure, and terminate the child on timeout.
+
+This corrects the local RR04 behavior; it does not establish S19 live
+REST/Gateway or actual Docker acceptance. No Node or database schema changed.
