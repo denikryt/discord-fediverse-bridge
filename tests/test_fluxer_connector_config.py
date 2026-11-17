@@ -67,6 +67,24 @@ class FluxerConfigTests(unittest.TestCase):
                     Settings(_env_file=path, **base)
                 self.assertEqual(Settings(_env_file=None, **base).bridge_platform, 'discord')
 
+    def test_settings_has_one_connector_validation_path(self) -> None:
+        """Both modes use one connector parser path, despite Pydantic revalidation."""
+        from unittest.mock import patch
+        from src import fluxer_connector_config
+
+        # Parsing is an admission check, not a cache. Each newly validated
+        # Settings instance should inspect the raw JSON once regardless of mode.
+        for raw in (None, json.dumps([self._instance()])):
+            with self.subTest(enabled=raw is not None), patch.object(
+                fluxer_connector_config, 'parse_fluxer_connectors',
+                wraps=fluxer_connector_config.parse_fluxer_connectors,
+            ) as parse:
+                selected = self._settings(raw)
+                self.assertEqual(selected.bridge_platform, 'fluxer' if raw else 'discord')
+                # Settings.model_validate revalidates BaseSettings twice, so
+                # one after-validator path gives exactly two invocations.
+                self.assertEqual(parse.call_count, 2)
+
     def test_disconnected_default_has_no_connector_config(self) -> None:
         """No env opt-in means no Fluxer client, socket, or DB provisioning."""
         settings = self._settings(None)

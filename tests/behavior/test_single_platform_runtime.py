@@ -242,6 +242,25 @@ class ExclusiveRuntimeContracts(unittest.TestCase):
             finally:
                 asyncio.run(runtime.close())
 
+    def test_fluxer_startup_uses_one_trusted_connector_for_both_admissions(self) -> None:
+        """Runtime reuse of a validated connector must not reparse secrets after migration."""
+        from src.app import build_runtime
+        from src import fluxer_connector_config
+
+        settings = config(self.root)
+        # The runtime first classifies the old DB read-only, then binds the
+        # same connector transactionally and composes its RPC/ingress owners.
+        with mock.patch.object(
+            fluxer_connector_config, 'parse_fluxer_connectors',
+            wraps=fluxer_connector_config.parse_fluxer_connectors,
+        ) as parse:
+            runtime = build_runtime(settings)
+            try:
+                self.assertEqual(parse.call_count, 1)
+                self.assertEqual(runtime.physical_delivery_scheduler.connector_keys, ('fx-primary',))
+            finally:
+                asyncio.run(runtime.close())
+
     def test_fluxer_runtime_rejects_accidental_discord_owner(self) -> None:
         """An accidental second platform owner is refused at graph validation."""
         from src.app import _validate_runtime_graph, build_runtime

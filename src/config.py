@@ -326,14 +326,6 @@ class Settings(BaseSettings):
             raise ValueError("lock paths must not be inside the profile media root")
         return self
 
-    @model_validator(mode="after")
-    def _validate_fluxer_configuration(self) -> "Settings":
-        """Fail startup before opening a Gateway for malformed opt-in instances."""
-        from .fluxer_connector_config import parse_fluxer_connectors
-
-        parse_fluxer_connectors(self.fluxer_connectors_json)
-        return self
-
     @property
     def fluxer_connectors(self):
         """Return canonical opt-in instances without exposing raw secret JSON."""
