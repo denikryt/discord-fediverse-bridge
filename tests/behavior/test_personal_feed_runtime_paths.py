@@ -457,6 +457,7 @@ async def test_activitypub_personal_target_precedes_community_dispatch(
     conversation = _conversation_runtime(database, service, _Gateway())
     community = SimpleNamespace(handle_inbound_comment=AsyncMock())
     runtime = SimpleNamespace(
+        settings=SimpleNamespace(bridge_platform='discord'),
         database=database,
         personal_feed_conversation_runtime=conversation,
         community_runtime=community,

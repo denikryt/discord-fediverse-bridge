@@ -27,6 +27,7 @@ def _runtime(
 ) -> SimpleNamespace:
     """Build a minimal runtime carrying dashboard-owned dependencies."""
     settings = SimpleNamespace(
+        bridge_platform='discord',
         fedify_origin="https://discrod-bridge.example.com",
         normalized_fedify_origin="https://discrod-bridge.example.com",
         fedify_actor_identifier="bridge",

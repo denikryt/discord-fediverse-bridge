@@ -50,6 +50,7 @@ def _runtime(tmp_path: Path) -> SimpleNamespace:
     """Build the shared runtime dependencies used by registration route tests."""
     database = _database(tmp_path)
     settings = SimpleNamespace(
+        bridge_platform='discord',
         fedify_shared_secret="test-secret",
         normalized_public_bridge_base_url="https://bridge.example.com",
         normalized_fedify_origin="https://gateway.example.com",

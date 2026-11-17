@@ -144,9 +144,9 @@ async def dispatch_activitypub_event(
         return await handle_follow_accepted(event, runtime)
     # FLUXER_ONLY_USER_ACTOR_FOLLOW_PENDING_ISSUE14: No verified Fluxer-owned Person accounts exist yet; reject local user Follow and Undo without constructing Discord owner notifications or persisting a follower.
     if (
-        runtime.settings.bridge_platform == 'fluxer'
-        and event.event_type in {'local.follow_requested', 'local.unfollow_requested'}
+        event.event_type in {'local.follow_requested', 'local.unfollow_requested'}
         and event.target_actor_kind == 'user'
+        and runtime.settings.bridge_platform == 'fluxer'
     ):
         return HandlerResult(
             status='skipped', outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,

@@ -18,6 +18,13 @@ from support.community_events import ScenarioDiscord
 
 def wire(namespace):
     """Fill explicitly requested domain Runtime graphs; retain supplied dependencies."""
+    # Legacy scenario graphs explicitly model Discord-only processes. Supply
+    # the selected mode at the test graph boundary, never in production's
+    # validated Settings or handler code.
+    if not hasattr(namespace, 'settings'):
+        namespace.settings = SimpleNamespace(bridge_platform='discord')
+    elif isinstance(namespace.settings, SimpleNamespace) and not hasattr(namespace.settings, 'bridge_platform'):
+        namespace.settings.bridge_platform = 'discord'
     local = getattr(namespace, 'local_community_runtime', None)
     remote = getattr(namespace, 'community_runtime', None)
     owner = local if isinstance(local, LocalCommunityRuntime) else remote
