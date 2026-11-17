@@ -374,7 +374,7 @@ class FluxerAdapter:
             raise PlatformOperationError('forbidden', 'Fluxer bot permission not verified')
         return applied_tags
 
-    async def _preflight_thread_send(self, thread: ThreadRef) -> None:
+    async def _preflight_thread_send(self, thread: ThreadRef) -> ThreadRef:
         """Authorize sends in the thread, independently of parent forum SendMessages.
 
         Physical thread identity and guild membership are verified before ACL.
@@ -409,6 +409,9 @@ class FluxerAdapter:
         # revoked right stays `forbidden`, not `unsupported`.
         if not (await self.capabilities(physical)).thread_replies:
             raise PlatformOperationError('unsupported', 'Fluxer thread replies not verified')
+        # Return the scoped read, not the caller's optional guild hint. The
+        # exact guild validated above must be carried into the Node write DTO.
+        return verified
 
     def _mint_coordinator_dispatch_permit(
         self, *, proof: CommittedCreateDispatchProof,
@@ -569,19 +572,17 @@ class FluxerAdapter:
         async def perform() -> CreatedMessage:
             """Verify parent and bot ACL before issuing one physical RPC write."""
             if isinstance(destination, ThreadRef):
-                await self.fetch_thread(destination)
+                # One checked thread lookup resolves the guild for the write;
+                # missing caller metadata cannot replace live provider proof.
+                confirmed = await self._preflight_thread_send(destination)
                 if reply_to is not None:
-                    # The reply's immediate container is necessary but not
-                    # sufficient: confirm its exact physical parent exists.
+                    # The immediate reply parent must exist in this thread.
                     await self.fetch_message(reply_to)
-                channel = destination.channel
-                container_id = destination.external_thread_id
+                channel = confirmed.channel
+                container_id = confirmed.external_thread_id
             else:
                 channel = destination
                 container_id = destination.external_channel_id
-            if isinstance(destination, ThreadRef):
-                await self._preflight_thread_send(destination)
-            else:
                 await self._preflight(channel, is_forum=False, action='send_message')
             response = await self._call('send_message', {
                 'container_id': container_id, 'guild_id': channel.external_guild_id,

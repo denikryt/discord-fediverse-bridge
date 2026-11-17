@@ -17,7 +17,7 @@ from src.fluxer_connector_config import FluxerConnectorConfig
 from src.fluxer_rpc_client import FluxerRpcClient
 from src.platform_types import (
     ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation, MessageRef,
-    PlatformOperationError,
+    PlatformOperationError, ThreadRef,
 )
 
 
@@ -214,6 +214,43 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(await adapter.refresh_readiness(), ready)
                 finally:
                     await rpc.close()
+
+    async def test_verified_thread_guild_fills_missing_hint_and_rejects_wrong_hint(self) -> None:
+        """An omitted caller guild hint must not discard the live verified guild on write."""
+        root = await self.adapter.create_forum_thread(
+            self.forum, ContentDocument('root'), title='Topic',
+            presentation=DeliveryPresentation('bot'), attempt=self.attempt,
+        )
+        no_hint = ThreadRef(ChannelRef('fx-forum', 'forum-1', 'forum'), 'thread-9')
+        # Two nested sends use the same physically proven guild even though
+        # neither caller-provided thread reference contains that hint.
+        for index, parent in enumerate((root.starter,
+                                        MessageRef('fx-forum', 'thread-9', 'message-12'))):
+            receipt = await self.adapter.send_message(
+                no_hint, ContentDocument(f'child {index}'), reply_to=parent,
+                presentation=DeliveryPresentation('bot'),
+                attempt=CreateAttempt(f'no-guild-{index}', 'fx-forum', 'message', no_hint),
+            )
+            self.assertEqual(receipt.message.external_container_id, 'thread-9')
+        sends = [json.loads(line)['sdk_send'] for line in self.effects.read_text().splitlines()
+                 if 'sdk_send' in json.loads(line)]
+        self.assertEqual(len(sends), 2)
+        self.assertEqual([send['options']['replyTo']['messageId'] for send in sends],
+                         [self.starter_id, 'message-12'])
+        self.assertEqual([send['options']['replyTo']['guildId'] for send in sends],
+                         ['guild-1', 'guild-1'])
+        # An explicit conflicting hint is not repaired silently by the server.
+        foreign = ThreadRef(ChannelRef('fx-forum', 'forum-1', 'forum', 'foreign-guild'),
+                            'thread-9')
+        with self.assertRaises(PlatformOperationError) as caught:
+            await self.adapter.send_message(
+                foreign, ContentDocument('foreign'), reply_to=root.starter,
+                presentation=DeliveryPresentation('bot'),
+                attempt=CreateAttempt('foreign-hint', 'fx-forum', 'message', foreign),
+            )
+        self.assertEqual(caught.exception.reason, 'invalid_request')
+        self.assertEqual(sum('sdk_send' in json.loads(line)
+                             for line in self.effects.read_text().splitlines()), 2)
 
     async def test_lost_reply_response_never_reposts(self) -> None:
         """A lost reply ACK retains uncertain delivery without a second SDK send."""
