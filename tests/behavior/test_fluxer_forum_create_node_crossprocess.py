@@ -93,6 +93,39 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(starter.content.body, 'Hello from AP')
         self.assertTrue(starter.author.is_bridge_owned)
 
+    async def test_forum_create_uses_verified_guild_when_hint_is_missing(self) -> None:
+        """A scoped forum read supplies the guild for the actual Node write and receipt."""
+        no_hint = ChannelRef('fx-forum', 'forum-1', 'forum')
+        attempt = CreateAttempt('forum-no-hint', 'fx-forum', 'forum_thread', no_hint)
+        created = await self.adapter.create_forum_thread(
+            no_hint, ContentDocument('new topic'), title='Topic',
+            presentation=DeliveryPresentation('bot'), attempt=attempt,
+        )
+        self.assertEqual(created.thread.channel.external_guild_id, 'guild-1')
+        self.assertEqual(created.starter.external_container_id, 'thread-9')
+        effects = [json.loads(line) for line in self.effects.read_text().splitlines()]
+        self.assertEqual(len(effects), 1)
+        self.assertEqual(effects[0]['route'], '/channels/forum-1/threads')
+        self.assertEqual(effects[0]['options']['body']['applied_tags'], ['tag-a'])
+
+    async def test_forum_create_matching_and_foreign_guild_hints(self) -> None:
+        """An exact hint works, but a foreign hint never reaches SDK REST."""
+        wrong = ChannelRef('fx-forum', 'forum-1', 'forum', 'other-guild')
+        with self.assertRaises(PlatformOperationError) as denied:
+            await self.adapter.create_forum_thread(
+                wrong, ContentDocument('foreign topic'), title='Topic',
+                presentation=DeliveryPresentation('bot'),
+                attempt=CreateAttempt('forum-foreign-hint', 'fx-forum', 'forum_thread', wrong),
+            )
+        self.assertEqual(denied.exception.reason, 'invalid_request')
+        self.assertFalse(self.effects.exists())
+        created = await self.adapter.create_forum_thread(
+            self.forum, ContentDocument('local topic'), title='Topic',
+            presentation=DeliveryPresentation('bot'), attempt=self.attempt,
+        )
+        self.assertEqual(created.thread.channel.external_guild_id, 'guild-1')
+        self.assertEqual(len(self.effects.read_text().splitlines()), 1)
+
     async def test_cross_instance_and_webhook_request_never_reaches_rest(self) -> None:
         """Reject out-of-scope or webhook Create before a physical Node write."""
         with self.assertRaises(PlatformOperationError):

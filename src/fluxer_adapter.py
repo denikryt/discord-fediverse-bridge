@@ -325,8 +325,8 @@ class FluxerAdapter:
             raise PlatformOperationError('unsupported', 'Fluxer bot cannot impersonate presentation')
 
     async def _preflight(self, channel: ChannelRef, *, is_forum: bool,
-                         action: PlatformAction) -> tuple[str, ...]:
-        """Verify live channel/capability/bot ACL and return verified tag selection."""
+                         action: PlatformAction) -> tuple[ChannelRef, tuple[str, ...]]:
+        """Return the verified channel scope and tag selection for a physical write."""
         self._scope(channel.connector_key)
         if await self._attested_bot_id() is None:
             raise PlatformOperationError('unavailable', 'Fluxer bot identity not attested')
@@ -372,7 +372,9 @@ class FluxerAdapter:
         grants = await self.check_permissions(principal, verified, actions)
         if any(grants.get(permission) != 'allowed' for permission in actions):
             raise PlatformOperationError('forbidden', 'Fluxer bot permission not verified')
-        return applied_tags
+        # The caller's guild is only an optional hint. Every write must use
+        # the live provider-confirmed guild, just as the ACL and tag checks do.
+        return verified, applied_tags
 
     async def _preflight_thread_send(self, thread: ThreadRef) -> ThreadRef:
         """Authorize sends in the thread, independently of parent forum SendMessages.
@@ -532,22 +534,24 @@ class FluxerAdapter:
 
         async def perform() -> CreatedThread:
             """Verify rights before entering the potentially effectful Node SDK boundary."""
-            applied_tags = await self._preflight(forum, is_forum=True, action='create_forum_post')
+            verified, applied_tags = await self._preflight(
+                forum, is_forum=True, action='create_forum_post',
+            )
             response = await self._call('create_forum_thread', {
-                'forum_id': forum.external_channel_id,
-                'guild_id': forum.external_guild_id, 'title': title,
+                'forum_id': verified.external_channel_id,
+                'guild_id': verified.external_guild_id, 'title': title,
                 'content': {'body': content.body, 'format': 'plain'},
                 'allowed_mentions': {'parse': []}, 'attempt_key': attempt.key,
                 'delivery_mode': 'bot', 'applied_tags': list(applied_tags),
             })
             try:
-                if (self._id(response, 'forum_id') != forum.external_channel_id
-                    or response.get('guild_id') != forum.external_guild_id
+                if (self._id(response, 'forum_id') != verified.external_channel_id
+                    or response.get('guild_id') != verified.external_guild_id
                     or response.get('delivery_mode') != 'bot'):
                     raise ValueError('wrong forum or mode')
                 thread_id = self._id(response, 'thread_id')
                 starter_id = self._id(response, 'starter_id')
-                return CreatedThread(ThreadRef(forum, thread_id),
+                return CreatedThread(ThreadRef(verified, thread_id),
                                      MessageRef(self._connector.key, thread_id, starter_id), 'bot')
             except (ValueError, PlatformOperationError) as exc:
                 raise PlatformOperationError('unknown_delivery', 'Fluxer forum receipt not verified') from exc
@@ -581,9 +585,12 @@ class FluxerAdapter:
                 channel = confirmed.channel
                 container_id = confirmed.external_thread_id
             else:
-                channel = destination
-                container_id = destination.external_channel_id
-                await self._preflight(channel, is_forum=False, action='send_message')
+                # An unscoped text/announcement target needs the same live
+                # guild proof as a forum Create or thread reply before SDK send.
+                channel, _ = await self._preflight(
+                    destination, is_forum=False, action='send_message',
+                )
+                container_id = channel.external_channel_id
             response = await self._call('send_message', {
                 'container_id': container_id, 'guild_id': channel.external_guild_id,
                 'reply_to_message_id': reply_to.external_message_id if reply_to else None,

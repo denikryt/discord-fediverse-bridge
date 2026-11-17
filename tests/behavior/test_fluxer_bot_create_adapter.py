@@ -334,6 +334,23 @@ class FluxerBotCreateScenarios(unittest.IsolatedAsyncioTestCase):
                                             attempt=CreateAttempt('reply-b', 'fluxer-test', 'message', destination))
         self.assertEqual(len(self.provider.remote_messages), 1)
 
+    async def test_direct_channel_send_uses_verified_guild_and_rejects_wrong_hint(self):
+        """Text-channel sends must not discard the exact guild returned by fetch_channel."""
+        channel = ChannelRef('fluxer-test', 'text-1', 'text')
+        sent = await self.adapter.send_message(
+            channel, self.content, reply_to=None, presentation=self.presentation,
+            attempt=CreateAttempt('text-no-hint', 'fluxer-test', 'message', channel),
+        )
+        self.assertEqual(sent.message.external_container_id, 'text-1')
+        self.assertEqual(self.provider.remote_messages[-1]['guild_id'], 'guild-1')
+        wrong = ChannelRef('fluxer-test', 'text-1', 'text', 'wrong-guild')
+        with self.assertRaises(PlatformOperationError):
+            await self.adapter.send_message(
+                wrong, self.content, reply_to=None, presentation=self.presentation,
+                attempt=CreateAttempt('text-wrong-hint', 'fluxer-test', 'message', wrong),
+            )
+        self.assertEqual(len(self.provider.remote_messages), 1)
+
     async def test_unverified_thread_capability_refuses_before_write(self):
         """A verified parent cannot substitute for unavailable thread capability."""
         self.provider.thread_capability = False
