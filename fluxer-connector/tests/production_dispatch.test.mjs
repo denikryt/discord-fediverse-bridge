@@ -10,10 +10,11 @@ import {createProductionRpcHandler} from '../src/main.ts';
 function provider() {
   const writes=[];
   const saved=new Map();
-  const state={allow:true,threadBit:true,rolesKnown:true,closed:false,
+  const state={allow:true,history:true,threadBit:true,rolesKnown:true,closed:false,
     requiresTag:false,tags:[]};
   const acl={has:(flag)=>state.allow && (
-    ['ViewChannel','ReadMessageHistory','SendMessages'].includes(flag) ||
+    (flag === 'ReadMessageHistory' ? state.history :
+       ['ViewChannel','SendMessages'].includes(flag)) ||
       (flag === (1n << 38n) && state.threadBit))};
   const member={id:'bot-1',guild:{id:'guild-1'},roles:{roleIds:['writer']},
     permissionsIn:()=>acl};
@@ -138,6 +139,32 @@ test('production capability revocation and restoration are action specific',asyn
     h.state.threadBit=false;
     assert.equal((await h.call('capabilities',{channel_id:'thread-1'}))
       .body.result.thread_replies,false);
+  }finally{await h.close();}
+});
+
+/** Reply capabilities must include the same history-read requirement as SDK send. */
+test('read-history revocation suppresses thread capability and the SDK write',async()=>{
+  const h=await fixture();
+  const send=()=>h.call('send_message',{container_id:'thread-1',guild_id:'guild-1',
+    content:{body:'Reply',format:'plain'},reply_to_message_id:'message-1',
+    allowed_mentions:{parse:[]},attempt_key:'reply-history',delivery_mode:'bot'});
+  try {
+    assert.equal((await h.call('capabilities',{channel_id:'thread-1'}))
+      .body.result.thread_replies,true);
+    h.state.history=false;
+    const rights=await h.call('check_permissions',{channel_id:'thread-1',bot_id:'bot-1',
+      actions:['send_message','read_history']});
+    assert.equal(rights.body.result.send_message,'allowed');
+    assert.equal(rights.body.result.read_history,'denied');
+    assert.equal((await h.call('capabilities',{channel_id:'thread-1'}))
+      .body.result.thread_replies,false);
+    assert.notEqual((await send()).status,200);
+    assert.deepEqual(h.writes,[]);
+    h.state.history=true;
+    assert.equal((await h.call('capabilities',{channel_id:'thread-1'}))
+      .body.result.thread_replies,true);
+    assert.equal((await send()).status,200);
+    assert.deepEqual(h.writes,[['send','thread-1']]);
   }finally{await h.close();}
 });
 

@@ -92,7 +92,9 @@ export function createProductionRpcHandler(
       }
       const requested: string[] = [];
       if (metadata.forum_posts === true) requested.push('create_forum_post');
-      if (metadata.thread_replies === true) requested.push('send_message');
+      // Thread sends fetch and verify a parent message before the SDK write.
+      // Match the executor's ReadMessageHistory gate in advertised rights.
+      if (metadata.thread_replies === true) requested.push('send_message', 'read_history');
       if (metadata.message_edit_delete === true) {
         requested.push('edit_message', 'delete_message');
       }
@@ -110,7 +112,7 @@ export function createProductionRpcHandler(
         forum_posts: metadata.forum_posts === true && eligibleTags &&
           access.create_forum_post === 'allowed',
         thread_replies: metadata.thread_replies === true &&
-          access.send_message === 'allowed',
+          access.send_message === 'allowed' && access.read_history === 'allowed',
         message_edit_delete: metadata.message_edit_delete === true &&
           access.edit_message === 'allowed' && access.delete_message === 'allowed',
       };
