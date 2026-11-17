@@ -60,6 +60,15 @@ export function validateOrigin(raw: string, policy: DiscoveryPolicy = {}): URL {
       (url.protocol !== 'https:' && url.protocol !== 'http:')) {
     throw new Error('invalid Fluxer discovery origin');
   }
+  // WHATWG expands 127.1, 0x7f000001 and octal IPv4 spellings before
+  // exposing hostname. Python persists only canonical IPv4 literals; do not
+  // let Node attest a different instance identity from the operator input.
+  const authority = raw.match(/^https?:\/\/([^/?#]+)$/i)?.[1];
+  const enteredHost = authority?.startsWith('[') ? null : authority?.replace(/:\d+$/, '');
+  if (enteredHost !== null && enteredHost !== undefined &&
+      url.hostname !== enteredHost.toLowerCase()) {
+    throw new Error('noncanonical Fluxer discovery IPv4 authority');
+  }
   const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1' ||
     url.hostname === '[::1]';
   if (url.protocol !== 'https:' && !(local && policy.allowInsecureLocalDevelopment)) {

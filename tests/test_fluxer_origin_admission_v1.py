@@ -170,6 +170,10 @@ class FluxerOriginV1Tests(unittest.TestCase):
             "https://example.test?", "https://example.test#", "https://example.test:99999",
             "https://example.test:bogus", "https://example..test", "https://example.test ",
             "https://[fe80::1%eth0]", "https://", "https://-bad.test",
+            # WHATWG URL would rewrite these noncanonical IPv4 authority forms;
+            # SQLite must reject rather than save a different Node SDK origin.
+            "https://127.1", "https://0x7f000001", "https://0177.0.0.1",
+            "https://2130706433", "https://127.0.0.01",
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 canonical(invalid)

@@ -350,6 +350,13 @@ class PlatformSurfaceRepository(BaseRepository):
                 try:
                     normalized_host = str(ipaddress.IPv4Address(host))
                 except ipaddress.AddressValueError:
+                    # WHATWG URL interprets numeric-ending authorities as IPv4,
+                    # including shortened, octal, hexadecimal and single-integer
+                    # spellings. Python must refuse them rather than persist a
+                    # DNS string different from the Node SDK's actual origin.
+                    last_label = host.rsplit(".", 1)[-1]
+                    if re.fullmatch(r"(?:[0-9]+|0[xX][0-9a-fA-F]+)", last_label):
+                        raise ValueError("Noncanonical IPv4 connector origin")
                     # IDNA is applied by label before saving, never by a DNS
                     # lookup; labels must remain valid ASCII host labels.
                     normalized_host = host.encode("idna").decode("ascii").lower()

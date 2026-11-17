@@ -169,6 +169,9 @@ private HTTP bearer is a separate credential, not the SDK bot token.
 The trusted instance origin must be supplied as an ASCII hostname, with an
 explicit A-label for an IDN (`xn--...`), rather than a Unicode hostname;
 Python's IDNA codec and Node's WHATWG URL algorithm can otherwise disagree.
+Both sides also reject noncanonical IPv4 authorities (for example `127.1`,
+hex/octal forms or a single integer); only four dotted-decimal octets are
+accepted as IPv4 literals. Python SQLite identity and Node READY must agree.
 Both sides reject a trailing DNS dot and an HTTP bearer shorter than eight
 printable non-space ASCII characters. Direct RPC owners enforce the same
 header constraint even if a caller bypasses the normal entrypoint.

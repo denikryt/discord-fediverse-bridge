@@ -81,6 +81,23 @@ class FluxerSingleTrustedProvisioning(unittest.TestCase):
             self.assertEqual([(r.connector_key, r.instance_origin) for r in rows],
                              [('fx-one', 'https://one.test')])
 
+    def test_noncanonical_ipv4_origin_is_rejected_before_connector_admission(self) -> None:
+        """Settings must refuse WHATWG-only IPv4 spellings without SQLite effects."""
+        with self.db.session() as session:
+            before = [(row.connector_key, row.platform, row.instance_origin)
+                      for row in session.scalars(select(PlatformConnector)).all()]
+        for origin in ('https://127.1', 'https://0x7f000001',
+                       'https://0177.0.0.1', 'https://2130706433'):
+            with self.subTest(origin=origin), self.assertRaises(ValueError):
+                self._config(origin=origin)
+        with self.db.session() as session:
+            self.assertEqual([(row.connector_key, row.platform, row.instance_origin)
+                              for row in session.scalars(select(PlatformConnector)).all()], before)
+        self.assertEqual(self._config(origin='https://127.0.0.1').fluxer_connectors[0].origin,
+                         'https://127.0.0.1')
+        self.assertEqual(self._config(origin='https://XN--FA-HIA.test').fluxer_connectors[0].origin,
+                         'https://xn--fa-hia.test')
+
     def test_reserved_connector_preflight_leaves_existing_empty_file_unchanged(self) -> None:
         """A colliding bootstrap key is refused before any released-v0/v1 migration."""
         from tempfile import TemporaryDirectory

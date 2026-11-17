@@ -1,3 +1,15 @@
+## Fluxer-only transport follow-up (2026-11-17)
+
+- Forum Create and text/announcement channel sends now carry the live channel
+  guild ID from Python preflight into physical Node write DTOs and verify forum
+  receipts against it. Missing caller hints are accepted, conflicting hints
+  are rejected before SDK effects; cross-process forum regression covers both.
+- Python and Node reject shortened, hex, octal and integer-form IPv4 origins.
+  Only canonical dotted-decimal IPv4 is accepted, avoiding WHATWG normalization
+  changing the SQLite-persisted identity. DNS and explicit IDN A-labels remain.
+- S19 remains open for live Fluxer REST/Gateway, Compose and full tests with
+  lockfile dependencies. Local SDK-boundary fakes do not prove live acceptance.
+
 ## Fluxer-only edge re-review (2026-11-17)
 
 - Thread reply sends now carry the fresh verified guild identity to the Node RPC,

@@ -27,6 +27,18 @@ test('Unicode IDN requires explicit ASCII A-label on every self-hosted identity'
     validateOrigin('https://fass.test').origin);
 });
 
+test('noncanonical numeric IPv4 authorities are refused before SDK discovery', () => {
+  for (const origin of ['https://127.1', 'https://0x7f000001',
+    'https://0177.0.0.1', 'https://2130706433', 'https://127.0.0.01']) {
+    assert.throws(() => validateOrigin(origin), origin);
+  }
+  assert.equal(validateOrigin('https://127.0.0.1').origin, 'https://127.0.0.1');
+  assert.equal(validateOrigin('http://127.0.0.1:8769',
+    {allowInsecureLocalDevelopment: true}).origin, 'http://127.0.0.1:8769');
+  assert.equal(validateOrigin('https://FX.test:443').origin, 'https://fx.test');
+  assert.equal(validateOrigin('https://XN--FA-HIA.test').origin, 'https://xn--fa-hia.test');
+});
+
 test('bot REST needs api_public and an approved self-hosted API host', () => {
   assert.throws(() => validateDiscoveryDocument('https://example.test',
     {endpoints: {api: 'https://example.test'}}));

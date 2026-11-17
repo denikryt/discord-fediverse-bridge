@@ -146,6 +146,10 @@ bearer is separate from the bot credential; assign a long random bearer.
 Both `FLUXER_ORIGIN` and its JSON counterpart must use an ASCII DNS name;
 write internationalized hostnames as explicit **punycode A-labels** (for
 example `https://xn--fa-hia.test`), not Unicode or a trailing DNS root dot.
+IPv4 origins must use four canonical dotted-decimal octets (for example
+`https://127.0.0.1` for explicit local tests). Short forms such as `127.1`,
+hexadecimal, octal and single-integer IPv4 are rejected before startup:
+Python and Node must not persist and attest different origin identities.
 Both private bearer values must match exactly and contain at least eight
 printable ASCII characters (no spaces, controls or Unicode), suitable for an
 HTTP Authorization header. Invalid values fail configuration before startup.
