@@ -258,7 +258,12 @@ class RemotePersonFollowService:
         return completed
 
     async def dispatch_prepared(self, limit: int = 20) -> int:
-        """Claim one prepared generation at a time and persist exact send outcomes."""
+        """Dispatch at most ``limit`` potentially sent Follow activities.
+
+        Policy denials and gateway-proven pre-network failures retain their
+        identities without consuming the network dispatch budget. Each row
+        is considered only once per drain to avoid retry loops.
+        """
         completed = 0
         attempted = 0
         last_scanned_id = 0
@@ -295,7 +300,6 @@ class RemotePersonFollowService:
                     follow_activity_id=row.follow_activity_id,
                 )
                 row_id = row.id
-            attempted += 1
             try:
                 await self.gateway.send_prepared_person_follow(prepared)
                 next_status, last_error = 'sent', None
@@ -308,6 +312,11 @@ class RemotePersonFollowService:
                 # HTTP timeouts or errors may follow a successful remote send;
                 # marking uncertain prevents a duplicate Follow on restart.
                 next_status, last_error = 'uncertain', str(error)
+            # Only a successful or potentially transmitted Follow consumes the
+            # network budget. A proven pre-send rejection must not starve the
+            # next eligible row when a slash command requests limit=1.
+            if next_status != 'prepared':
+                attempted += 1
             with self.database.immediate_session() as session:
                 row = session.get(RemotePersonFollow, row_id)
                 if row is not None and row.follow_claim_token == token and row.follow_dispatch_state == 'sending':

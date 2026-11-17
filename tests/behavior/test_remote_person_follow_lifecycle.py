@@ -178,6 +178,67 @@ class FollowLifecycleScenarios(unittest.TestCase):
         self.assertEqual(asyncio.run(self.service.dispatch_prepared(limit=1)), 1)
         self.assertEqual(self.gateway.sends[-1].follow_activity_id, first.follow_activity_id)
 
+    def test_proved_unsent_follow_does_not_exhaust_single_send_budget(self):
+        """Three command-sized drains must reach B despite A's persistent pre-send error."""
+        first = self.subscribe()
+        second = self.subscribe('charlie', 101)
+        blocked = True
+
+        def before_send(request):
+            """Simulate gateway rejecting A before any outbound Follow request."""
+            if blocked and request.follow_activity_id == first.follow_activity_id:
+                raise FollowNotDispatchedError('gateway rejected before network')
+
+        self.gateway.on_send = before_send
+        # /person-feed follow uses limit=1; A may not consume that network
+        # budget because the gateway proves the network was never contacted.
+        self.assertEqual([
+            asyncio.run(self.service.dispatch_prepared(limit=1)) for _ in range(3)
+        ], [1, 0, 0])
+        self.assertEqual(self.status(first.follow_id)[1], 'prepared')
+        self.assertEqual(self.status(second.follow_id)[1], 'sent')
+        self.assertEqual([
+            item.follow_activity_id for item in self.gateway.sends
+        ], [first.follow_activity_id, second.follow_activity_id,
+            first.follow_activity_id, first.follow_activity_id])
+        with self.db.session() as session:
+            row = session.get(RemotePersonFollow, first.follow_id)
+            self.assertEqual(row.follow_activity_id, first.follow_activity_id)
+            self.assertIn('before network', row.last_error)
+            self.assertEqual(len(session.scalars(select(RemotePersonFollow)).all()), 2)
+
+        # Removing the gateway preflight failure permits the original A
+        # generation to send, without replaying B or minting a second ID.
+        blocked = False
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared(limit=1)), 1)
+        self.assertEqual(self.gateway.sends[-1].follow_activity_id, first.follow_activity_id)
+        self.assertEqual(self.status(first.follow_id)[1], 'sent')
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared(limit=1)), 0)
+
+    def test_ambiguous_follow_consumes_one_send_budget_and_is_not_retried(self):
+        """An unknown network outcome counts against limit=1, unlike pre-send failure."""
+        first = self.subscribe()
+        second = self.subscribe('charlie', 101)
+
+        def before_return(request):
+            """Simulate an HTTP timeout after A may have reached its inbox."""
+            if request.follow_activity_id == first.follow_activity_id:
+                raise TimeoutError('possibly transmitted')
+
+        self.gateway.on_send = before_return
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared(limit=1)), 0)
+        self.assertEqual(self.status(first.follow_id)[1], 'uncertain')
+        self.assertEqual(self.status(second.follow_id)[1], 'prepared')
+        self.assertEqual([item.follow_activity_id for item in self.gateway.sends],
+                         [first.follow_activity_id])
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared(limit=1)), 1)
+        self.assertEqual(self.status(second.follow_id)[1], 'sent')
+        self.assertEqual([item.follow_activity_id for item in self.gateway.sends],
+                         [first.follow_activity_id, second.follow_activity_id])
+        # The ambiguous original Follow is not repeated on later drains.
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared(limit=1)), 0)
+        self.assertEqual(len(self.gateway.sends), 2)
+
     def test_fast_accept_during_sending_survives_sender_completion(self):
         """A legitimate Accept wins over the subsequent HTTP completion write."""
         pending = self.subscribe()
