@@ -571,7 +571,10 @@ export async function deliverDirectUpdateActivity(
     logDebug(isDebug, "normalizeUpdateActivityFromJson returned null for direct Update");
     return;
   }
-  event.source_activity_json = sourceActivityJson;
+  // Direct Person normalization already canonicalized the ActivityStreams
+  // Public alias. Replacing its source with raw JSON-LD breaks Python's
+  // authenticated audience check on valid `as:Public` Updates.
+  if (!isRemotePersonContentEvent(event)) event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
   if (isRemotePersonContentEvent(event)) {
     await enrichDirectPersonActor(activity, event);
@@ -600,16 +603,51 @@ export async function deliverDirectDeleteActivity(
   const deletedId = typeof deleted === "string" ? deleted
     : deleted != null && typeof deleted === "object" && typeof (deleted as Record<string, unknown>).id === "string"
       ? (deleted as Record<string, unknown>).id as string : null;
-  if (deletedId != null) {
-    const target = await getPythonBridgeClient(config).loadConversationTargetByObjectId(deletedId);
-    if (target?.publicationContext === "remote_person_feed" && deletedId !== target.rootObjectId) {
-      const event = normalizeDirectRemotePersonCommentFromJson(sourceActivityJson);
-      if (event != null) {
-        await deliverNormalizedEvent(config, event, {
-          deliveryId: event.delivery_id, eventType: event.event_type, objectId: deletedId,
+  // A Delete containing only an object IRI does not reveal whether that
+  // unknown Note was a root or reply. The Python bridge retains one bounded
+  // provisional identity until a signed Create proves its actual shape.
+  const target = deletedId == null ? null
+    : await getPythonBridgeClient(config).loadConversationTargetByObjectId(deletedId);
+  if (deletedId != null && target?.publicationContext === "remote_person_feed") {
+    // Canonical storage already knows whether the Note is a root or reply.
+    // URL spelling (/post/NN on NodeBB, for example) is never a type proof.
+    const event = deletedId === target.rootObjectId
+      ? normalizeDirectRemotePersonEventFromJson(sourceActivityJson)
+      : normalizeDirectRemotePersonCommentFromJson(sourceActivityJson);
+    if (event != null) {
+      await deliverNormalizedEvent(config, event, {
+        deliveryId: event.delivery_id, eventType: event.event_type, objectId: deletedId,
+      });
+    }
+    return;
+  }
+  if (deletedId != null && target == null) {
+    // An unknown object's URL path cannot prove whether it is a Note root,
+    // reply, or a Lemmy-style /post/ ID. For signed direct Person inboxes,
+    // stage one author-scoped tombstone regardless of that path spelling.
+    // First honor *verified* local Group addressing so community Deletes
+    // retain their original routing and cannot be stolen by this fallback.
+    const route: VerifiedInboxRoute = trustedContext?.activitypubInboxPath === "shared"
+      ? { kind: "shared" }
+      : trustedContext?.activitypubInboxPath === "actor"
+        ? { kind: "actor", owner: trustedContext.activitypubInboxOwner }
+        : { kind: "unknown" };
+    const destination = await selectVerifiedLocalGroupDestinations(
+      config.fedifyOrigin, route, sourceActivityJson,
+      async (candidate) => {
+        const group = await resolveLocalCommunityByActorUrl(config, candidate);
+        return group?.actorId.href ?? null;
+      },
+    );
+    if (destination.kind === "remote") {
+      const provisional = normalizeDirectRemotePersonCommentFromJson(sourceActivityJson);
+      if (provisional != null) {
+        await deliverNormalizedEvent(config, provisional, {
+          deliveryId: provisional.delivery_id, eventType: provisional.event_type,
+          objectId: provisional.object.ap_id,
         });
+        return;
       }
-      return;
     }
   }
   const event = await normalizeDeleteActivityFromJson(sourceActivityJson, { pythonBridgeClient: getPythonBridgeClient(config) });

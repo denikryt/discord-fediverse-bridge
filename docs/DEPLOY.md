@@ -284,6 +284,24 @@ DB reset. A standalone `CREATE UNIQUE INDEX` is **not** an equivalent physical
 schema snapshot and may fail strict fingerprint validation. Do not perform a
 reset or alignment as an application startup side effect.
 
+On a stopped **development** copy with its complete backup verified, the
+explicit offline tool can rebuild the assignment table to the fixed v2 DDL:
+
+```bash
+python -m scripts.align_dev_v2_assignments \
+  --source /path/to/stopped-old-v2.db \
+  --output /path/to/aligned-v2.db \
+  --offline-confirmed
+```
+
+The command refuses conflicting Follow/guild rows and unrelated schema
+changes. It writes only a new file, preserving all existing rows and the
+unchanged source. It checks `PRAGMA user_version=2`, foreign keys, SQLite
+integrity and the complete v2 physical schema fingerprint before returning.
+Replace the development database only after inspecting the output and with
+all writers stopped; keep the original database and media backup for rollback.
+No production startup performs this operation, and no v3 migration is added.
+
 After the approved offline operation, check `PRAGMA user_version` (=2),
 `PRAGMA integrity_check` (=ok), `PRAGMA foreign_key_check` (empty), and that
 startup accepts the frozen v2 physical fingerprint. Verify an immediate

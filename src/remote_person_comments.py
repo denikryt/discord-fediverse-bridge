@@ -239,7 +239,7 @@ class RemotePersonCommentService:
                 existing.content_markdown = event.object.body_markdown or ''
                 existing.source_activity_json = json.dumps(source, sort_keys=True)
                 existing.revision_fingerprint = _fingerprint(source)
-                existing.updated_at_remote = event.occurred_at
+                existing.updated_at_remote = _utc(event.occurred_at)
                 return RemoteCommentReservation('updated', existing.id)
             if operation == 'deleted':
                 # Signed deletion may precede the signed Create. Persist only a
@@ -253,7 +253,7 @@ class RemotePersonCommentService:
                     conversation_root_object_id='', parent_object_id=None,
                     actor_id=event.actor_id, actor_name=event.object.author_name,
                     content_markdown='', source_activity_json=json.dumps(source, sort_keys=True),
-                    updated_at_remote=event.occurred_at, deleted_at=utcnow(),
+                    updated_at_remote=_utc(event.occurred_at), deleted_at=utcnow(),
                     revision_fingerprint=_fingerprint(source),
                 )
                 session.add(tombstone)
@@ -276,7 +276,7 @@ class RemotePersonCommentService:
                     actor_id=event.actor_id, actor_name=event.object.author_name,
                     content_markdown=event.object.body_markdown or '',
                     source_activity_json=json.dumps(source, sort_keys=True),
-                    published_at=event.object.published_at, updated_at_remote=event.occurred_at,
+                    published_at=event.object.published_at, updated_at_remote=_utc(event.occurred_at),
                     revision_fingerprint=_fingerprint(source),
                 )
                 session.add(child)
@@ -303,7 +303,7 @@ class RemotePersonCommentService:
                 content_markdown=event.object.body_markdown or '',
                 source_activity_json=json.dumps(source, sort_keys=True),
                 published_at=event.object.published_at,
-                updated_at_remote=event.occurred_at,
+                updated_at_remote=_utc(event.occurred_at),
                 revision_fingerprint=_fingerprint(source),
             )
             session.add(comment)

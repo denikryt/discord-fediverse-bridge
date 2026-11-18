@@ -131,6 +131,12 @@ def render_feed_discord_message(*, header: str, body: str,
     whitespace = max(clean_body.rfind(' ', 0, cut), clean_body.rfind('\n', 0, cut))
     if whitespace > 0 and cut - whitespace < 32:
         cut = whitespace
+    # A word-boundary adjustment can move back *into* a Markdown label.
+    # Revalidate the final cut against the same complete protected atoms.
+    for link in _FEED_LINK.finditer(clean_body):
+        if link.start() < cut < link.end():
+            cut = link.start()
+            break
     prefix = clean_body[:cut].rstrip()
     short_body = (prefix + '…') if prefix else '…'
     result = head + '\n\n' + short_body + suffix

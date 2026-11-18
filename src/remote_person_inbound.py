@@ -15,7 +15,8 @@ from sqlalchemy import select
 
 from .activitypub_models import RemotePersonContentEvent, activity_actor_id
 from .db import Database
-from .models import RemotePersonPost, RemotePersonPostDelivery, RemotePersonFollow, RemotePersonChannelAssignment, utcnow
+from .models import (InboundConversationObject, RemotePersonPost, RemotePersonPostDelivery,
+                     RemotePersonFollow, RemotePersonChannelAssignment, utcnow)
 
 PUBLIC = 'https://www.w3.org/ns/activitystreams#Public'
 
@@ -101,8 +102,25 @@ class RemotePersonInboundService:
                 post.content_markdown = event.object.body_markdown or ''
                 post.revision_fingerprint = _fingerprint(source)
                 post.source_activity_json = json.dumps(source, sort_keys=True)
-                post.updated_at_remote = event.occurred_at
+                post.updated_at_remote = _utc(event.occurred_at)
                 return RemotePersonReservation('updated', post.id)
+            if event.event_type.endswith('.created'):
+                # An object-only Delete cannot say whether the missing Note was
+                # a root or a reply. The direct inbox stages one bounded shared
+                # tombstone in InboundConversationObject until Create proves it.
+                provisional = session.scalar(select(InboundConversationObject).where(
+                    InboundConversationObject.object_id == event.object.ap_id,
+                    InboundConversationObject.publication_context == 'remote_person_feed',
+                ))
+                if provisional is not None:
+                    if provisional.deleted_at is None or provisional.parent_object_id is not None:
+                        return RemotePersonReservation('object_already_comment')
+                    if provisional.actor_id == event.actor_id:
+                        return RemotePersonReservation('deleted')
+                    # An unverified owner of an unknown object cannot block a
+                    # later authenticated Create from its actual author.
+                    session.delete(provisional)
+                    session.flush()
             if event.event_type.endswith('.updated'):
                 # An Update cannot establish a never-seen Create or its audience.
                 return RemotePersonReservation('unknown_object')
@@ -123,7 +141,7 @@ class RemotePersonInboundService:
                     remote_avatar_url=None, content_markdown='',
                     source_activity_json=json.dumps(source, sort_keys=True),
                     revision_fingerprint=_fingerprint(source),
-                    deleted_at=utcnow(), updated_at_remote=event.occurred_at,
+                    deleted_at=utcnow(), updated_at_remote=_utc(event.occurred_at),
                 )
                 session.add(tombstone)
                 session.flush()
@@ -145,7 +163,7 @@ class RemotePersonInboundService:
                 remote_avatar_url=event.object.avatar_url, content_markdown=event.object.body_markdown or '',
                 source_activity_json=json.dumps(source, sort_keys=True),
                 revision_fingerprint=_fingerprint(source), published_at=event.object.published_at,
-                updated_at_remote=event.occurred_at,
+                updated_at_remote=_utc(event.occurred_at),
             )
             session.add(post)
             session.flush()

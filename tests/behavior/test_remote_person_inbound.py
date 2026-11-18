@@ -121,6 +121,61 @@ class RemotePersonInboundScenarios(unittest.TestCase):
             self.assertIsNotNone(session.scalar(select(RemotePersonPost.deleted_at)))
             self.assertEqual(session.scalars(select(RemotePersonPostDelivery)).all(), [])
 
+    def test_timezone_offset_is_persisted_as_utc_and_ordered_after_restart(self):
+        """A later true instant wins despite SQLite losing timezone offsets."""
+        self.when = datetime(2026, 11, 16, 5, tzinfo=timezone.utc)
+        self.assertEqual(self.service.reserve(self.event()).status, 'reserved')
+        first = datetime(2026, 11, 16, 8, 10, tzinfo=timezone(timedelta(hours=2)))
+        later = datetime(2026, 11, 16, 6, 20, tzinfo=timezone.utc)
+        earlier = datetime(2026, 11, 16, 6, 15, tzinfo=timezone.utc)
+        self.assertEqual(self.service.reserve(self.event('updated', when=first)).status, 'updated')
+        # Each service invocation opens a new SQLite session (equivalent to restart).
+        self.assertEqual(self.service.reserve(self.event('updated', when=later)).status, 'updated')
+        self.assertEqual(self.service.reserve(self.event('updated', when=earlier)).status, 'stale')
+        with self.db.session() as session:
+            self.assertEqual(session.scalar(select(RemotePersonPost.updated_at_remote)),
+                             later.replace(tzinfo=None))
+
+    def test_a_precreate_comment_tombstone_also_blocks_a_later_root_from_same_actor(self):
+        """Object-only Delete has no Note parent and must protect both shapes."""
+        from src.remote_person_comments import RemotePersonCommentService
+        from src.activitypub_models import RemotePersonCommentEvent
+        removed = self.event('deleted')
+        comment_delete = RemotePersonCommentEvent(
+            event_type='remote.person.comment.deleted',
+            delivery_id=removed.delivery_id, occurred_at=removed.occurred_at,
+            actor_id=removed.actor_id, verified_sender_actor_id=removed.actor_id,
+            source_activity_id=removed.source_activity_id,
+            source_activity_json=removed.source_activity_json,
+            object={'ap_id': OBJECT, 'parent_ap_id': None, 'author_name': 'bob'},
+        )
+        self.assertEqual(RemotePersonCommentService(self.db).reserve(comment_delete).status,
+                         'deleted_before_create')
+        self.assertEqual(self.service.reserve(self.event()).status, 'deleted')
+        with self.db.session() as session:
+            self.assertEqual(session.scalars(select(RemotePersonPostDelivery)).all(), [])
+
+
+    def test_foreign_provisional_delete_cannot_suppress_real_root_author(self):
+        """A signed Delete by a different actor cannot claim someone else's Note."""
+        from src.remote_person_comments import RemotePersonCommentService
+        from src.activitypub_models import RemotePersonCommentEvent
+        removed = self.event('deleted', actor='https://evil.example/users/mallory')
+        provisional = RemotePersonCommentEvent(
+            event_type='remote.person.comment.deleted',
+            delivery_id=removed.delivery_id, occurred_at=removed.occurred_at,
+            actor_id=removed.actor_id, verified_sender_actor_id=removed.actor_id,
+            source_activity_id=removed.source_activity_id,
+            source_activity_json=removed.source_activity_json,
+            object={'ap_id': OBJECT, 'parent_ap_id': None, 'author_name': 'mallory'},
+        )
+        self.assertEqual(RemotePersonCommentService(self.db).reserve(provisional).status,
+                         'deleted_before_create')
+        self.assertEqual(self.service.reserve(self.event()).status, 'reserved')
+        with self.db.session() as session:
+            self.assertEqual(len(session.scalars(select(RemotePersonPostDelivery)).all()), 2)
+
+
     def test_unknown_update_never_creates_root(self):
         """A standalone Update cannot invent a previously unseen publication."""
         self.assertEqual(self.service.reserve(self.event('updated')).status, 'unknown_object')

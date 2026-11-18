@@ -313,8 +313,27 @@ class RemotePersonCommentDeliveryWorker:
             row.claim_token = None
             row.last_error = str(error)[:500]
 
+    def _render_failure(self, claim: CommentDispatch, detail: str) -> None:
+        """Record an impossible-to-render identity as proven-unsent and terminal."""
+        with self.database.immediate_session() as session:
+            row = session.get(RemotePersonCommentPlacement, claim.placement_id)
+            if row is not None and row.state == 'claimed' and row.claim_token == claim.claim_token:
+                # The user-facing mandatory header has not crossed the Discord
+                # boundary, so no history reconciliation or blind retry applies.
+                row.state = 'failed'
+                row.claim_token = None
+                row.last_applied_revision = None
+                row.next_attempt_at = None
+                row.last_error = detail[:500]
+
     async def _send(self, claim: CommentDispatch) -> None:
         """Send one already-authorized bot comment, preserving exact ancestry."""
+        try:
+            feed_comment_content(actor_name=claim.actor_name, actor_id=claim.actor_id,
+                                 object_id=claim.object_id, body=claim.body)
+        except ValueError as exc:
+            self._render_failure(claim, str(exc))
+            return
         if not self._authorize(claim):
             return
         try:

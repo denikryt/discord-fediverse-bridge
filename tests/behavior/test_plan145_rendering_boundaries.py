@@ -78,6 +78,23 @@ class FeedRootRenderingContracts(unittest.TestCase):
             with self.subTest(url=url[:80]), self.assertRaises(ValueError):
                 remote_root_content(post(object_id=url))
 
+    def test_display_name_containing_at_sign_is_not_split(self) -> None:
+        """A Person display name is not a canonical handle separator."""
+        root = post()
+        root.remote_handle = 'Alice @ Work'
+        rendered = remote_root_content(root)
+        self.assertTrue(rendered.startswith('`Alice @ Work@remote.example`\n\n'))
+
+    def test_whitespace_cut_must_not_split_markdown_atom(self) -> None:
+        """A late whitespace adjustment cannot cut a protected Markdown label."""
+        link = '[read this multi word label](https://ref.example/a)'
+        for n in range(1850, 2000):
+            with self.subTest(prefix=n):
+                rendered = remote_root_content(post(body='x' * n + ' ' + link + ' ' + 'y' * 300))
+                self.assertLessEqual(len(rendered.encode('utf-16-le')) // 2, 2000)
+                self.assertTrue(link in rendered or '[read' not in rendered)
+
+
     def test_exact_root_history_match_requires_right_webhook_channel_and_footer(self) -> None:
         """Quoting an ID, a prefix URL or a foreign webhook proves nothing."""
         class Channel:

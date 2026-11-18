@@ -283,8 +283,11 @@ class ContentMutationRepository(BaseRepository):
             },
             separators=(",", ":"),
             sort_keys=True,
+            # Match JavaScript JSON.stringify: operation identity hashes the
+            # actual UTF-8 payload, never Python's ASCII \u escapes.
+            ensure_ascii=False,
         )
-        operation_id = hashlib.sha256(identity.encode()).hexdigest()
+        operation_id = hashlib.sha256(identity.encode('utf-8')).hexdigest()
         # The gateway renders mutations against canonical typed User Actor
         # activity ids; persistence must not reintroduce retired /users URLs.
         actor_parts = urlsplit(published.actor_url)

@@ -670,6 +670,21 @@ class RemotePersonComments(unittest.TestCase):
         self.assertEqual({call.channel_id: call.parent_message_id for call in edge.calls[2:]},
                          {100: 1000001, 101: 1010002})
 
+    def test_unrenderable_comment_is_terminal_without_discord_post(self):
+        """Long signed Note identities cannot create permanent uncertain entries."""
+        oversized = 'https://other.example/notes/' + 'x' * 2200
+        self.deliver_roots()
+        self.assertEqual(self.comments.reserve(self.event(object_id=oversized)).status, 'reserved')
+        worker, edge = self.worker()
+        asyncio.run(worker.drain_once())
+        self.assertEqual(edge.calls, [])
+        with self.db.session() as session:
+            self.assertEqual({row.state for row in session.scalars(
+                select(RemotePersonCommentPlacement))}, {'failed'})
+        asyncio.run(worker.drain_once())
+        self.assertEqual(edge.calls, [])
+
+
     def test_signed_delete_before_create_blocks_late_discord_comment(self):
         """A signed tombstone survives reorder without manufacturing a message."""
         self.deliver_roots()
@@ -682,6 +697,19 @@ class RemotePersonComments(unittest.TestCase):
         with self.db.session() as session:
             self.assertIsNotNone(session.scalar(select(InboundConversationObject).where(
                 InboundConversationObject.object_id == COMMENT)).deleted_at)
+
+    def test_comment_update_order_uses_utc_instant_across_sqlite_sessions(self):
+        """Offsets cannot make a chronologically newer signed Note look stale."""
+        self.assertEqual(self.comments.reserve(self.event()).status, 'reserved')
+        a = datetime(2026, 11, 16, 8, 10, tzinfo=timezone(timedelta(hours=2)))
+        b = datetime(2026, 11, 16, 6, 20, tzinfo=timezone.utc)
+        self.assertEqual(self.comments.reserve(self.event(operation='updated', when=a)).status, 'updated')
+        self.assertEqual(self.comments.reserve(self.event(operation='updated', when=b)).status, 'updated')
+        self.assertEqual(self.comments.reserve(self.event(operation='updated', when=a)).status, 'stale')
+        with self.db.session() as session:
+            self.assertEqual(session.scalar(select(InboundConversationObject.updated_at_remote)),
+                             b.replace(tzinfo=None))
+
 
     def test_unproven_delete_cannot_claim_another_actor_object(self):
         """An orphan Delete only suppresses a later Create by its own signer."""

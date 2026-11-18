@@ -55,13 +55,22 @@ def _safe_image_url(value: str | None) -> str | None:
     return value
 
 
-def _handle(post: object) -> str:
-    """Render an unambiguous handle using the canonical remote actor's host."""
+def _person_name(post: object) -> str:
+    """Keep Actor.name intact while removing only a known duplicate host suffix."""
     actor = urlsplit(post.remote_actor_id)
-    raw = str(post.remote_handle or actor.path.rsplit('/', 1)[-1]).strip('@')
-    # A remote display name is never allowed to replace the canonical host.
-    name = raw.split('@', 1)[0].strip() or actor.path.rsplit('/', 1)[-1]
-    return f'{name}@{actor.hostname}'[:80]
+    fallback = actor.path.rstrip('/').rsplit('/', 1)[-1]
+    name = str(post.remote_handle or fallback).strip().strip('@')
+    suffix = f'@{actor.hostname}'
+    # `Alice @ Work` is a display name, not a handle to split at the first @.
+    if name.lower().endswith(suffix.lower()):
+        name = name[:-len(suffix)]
+    return name.strip() or fallback
+
+
+def _handle(post: object) -> str:
+    """Render the incoming webhook display from the actor's canonical domain."""
+    actor = urlsplit(post.remote_actor_id)
+    return f'{_person_name(post)}@{actor.hostname}'[:80]
 
 
 def _attachment_urls(source: object) -> list[str]:
@@ -99,12 +108,9 @@ def remote_root_content(post: object) -> str:
     if body:
         lines.append(body)
     lines.extend(_attachment_urls(source))
-    actor = urlsplit(post.remote_actor_id)
-    name = str(post.remote_handle or actor.path.rsplit('/', 1)[-1]).strip('@')
-    # A saved handle may already include the instance host; the Community
-    # formatter adds the host exactly once from the canonical Actor ID.
-    name = name.split('@', 1)[0]
-    header = feed_author_header(name, post.remote_actor_id)
+    # The shared community formatter adds the domain; keep embedded @ in
+    # actor-level display names and strip only a preformatted host suffix.
+    header = feed_author_header(_person_name(post), post.remote_actor_id)
     footer = validate_feed_object_url(str(post.object_id))
     return render_feed_discord_message(
         header=header, body='\n\n'.join(lines), footer=footer,

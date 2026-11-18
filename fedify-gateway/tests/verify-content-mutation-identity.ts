@@ -22,7 +22,9 @@ function buildRequest(kind: "content_update" | "content_delete", targetInboxUrls
   const base = {
     actorUsername: "alice",
     communityActorUrl: "https://remote.example/c/group",
+    publicationContext: "community" as const,
     apObjectId: "https://bridge.example/actors/users/alice/objects/posts/1",
+    conversationRootObjectId: "https://bridge.example/actors/users/alice/objects/posts/1",
     targetInboxUrls,
     mutationTimestamp: "2026-06-16T10:00:00+00:00",
     expectedRevision: 1,
@@ -31,6 +33,8 @@ function buildRequest(kind: "content_update" | "content_delete", targetInboxUrls
   const requestShape = {
     actorUsername: base.actorUsername,
     communityActorUrl: base.communityActorUrl,
+    publicationContext: base.publicationContext,
+    conversationRootObjectId: base.conversationRootObjectId,
     apObjectId: base.apObjectId,
     kind: kind === "content_update" ? "post" : null,
     title: kind === "content_update" ? "Topic" : null,
@@ -67,6 +71,37 @@ for (const kind of ["content_update", "content_delete"] as const) {
   // verification derives identity entirely from immutable request inputs.
   verifyMutationIdentity(config, JSON.parse(JSON.stringify(request)) as never, kind);
 }
+// JavaScript hashes UTF-8 text directly. Python's persisted request must use
+// identical bytes for Unicode edits, not ASCII-escaped surrogate sequences.
+const unicodeRequest = buildRequest("content_update");
+const unicodeShape = {
+  actorUsername: unicodeRequest.actorUsername,
+  communityActorUrl: unicodeRequest.communityActorUrl,
+  publicationContext: unicodeRequest.publicationContext,
+  conversationRootObjectId: unicodeRequest.conversationRootObjectId,
+  apObjectId: unicodeRequest.apObjectId,
+  kind: unicodeRequest.kind,
+  title: unicodeRequest.title,
+  bodyMarkdown: "Правка 🦊",
+  inReplyToObjectId: unicodeRequest.inReplyToObjectId,
+  targetInboxUrls: unicodeRequest.targetInboxUrls,
+  mutationTimestamp: unicodeRequest.mutationTimestamp,
+};
+const unicodeId = createHash("sha256").update(stableJson({
+  objectId: unicodeRequest.apObjectId, kind: "content_update",
+  expectedRevision: unicodeRequest.expectedRevision,
+  nextRevision: unicodeRequest.nextRevision, request: unicodeShape,
+})).digest("hex");
+verifyMutationIdentity(config, {
+  ...unicodeRequest, bodyMarkdown: "Правка 🦊", operationId: unicodeId,
+  activityId: unicodeRequest.activityId.replace(unicodeRequest.operationId, unicodeId),
+} as never, "content_update");
+assert.throws(
+  () => verifyMutationIdentity(config, {
+    ...unicodeRequest, bodyMarkdown: "Правка 🦊",
+  } as never, "content_update"),
+  /mutation operation identity mismatch/,
+);
 // A durable remote Group mutation is rendered but never sent by the gateway.
 // The original Group/inbox/Follow is authorized later by the Python delivery worker.
 const noNetwork = { createContext: () => { throw new Error("render-only invoked Fedify network"); } };

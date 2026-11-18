@@ -16,7 +16,7 @@ from sqlalchemy import or_, select
 
 from .models import RemotePersonPost, RemotePersonPostDelivery, utcnow
 from .remote_person_feeds import RemotePersonChannelService
-from .remote_person_webhooks import RemotePersonWebhookTransport
+from .remote_person_webhooks import RemotePersonWebhookTransport, remote_root_content
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +213,19 @@ class RemotePersonRootDeliveryWorker:
             if row.state == 'pending':
                 row.next_attempt_at = utcnow() + timedelta(seconds=10 * row.attempt_count)
 
+    def _render_failure(self, claim: RootSnapshot, detail: str) -> None:
+        """Fail a deterministic unrenderable root without claiming an HTTP POST."""
+        with self.database.immediate_session() as session:
+            row = session.get(RemotePersonPostDelivery, claim.delivery_id)
+            if row is not None and row.state == 'claimed' and row.claim_token == claim.claim_token:
+                # No webhook request has happened; reconciliation would never
+                # find a message and must not quarantine this row as uncertain.
+                row.state = 'failed'
+                row.claim_token = None
+                row.last_applied_revision = None
+                row.next_attempt_at = None
+                row.last_error = detail[:500]
+
     def _ambiguous_failure(self, claim: RootSnapshot, detail: str) -> None:
         """Never retry a network-attempted webhook POST without reconciliation."""
         with self.database.immediate_session() as session:
@@ -274,6 +287,13 @@ class RemotePersonRootDeliveryWorker:
     async def _send_new(self, claim: RootSnapshot) -> None:
         """Commit guarded webhook ID then perform one and only one POST."""
         if claim.state == 'suppressed':
+            return
+        try:
+            # Validate the immutable author/identity budget before network
+            # authorization so a local ValueError can never mean uncertain.
+            remote_root_content(claim)
+        except ValueError as exc:
+            self._render_failure(claim, str(exc))
             return
         try:
             prepared = await self.transport.prepare(claim.channel_id)
