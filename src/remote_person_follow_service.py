@@ -257,6 +257,75 @@ class RemotePersonFollowService:
                 break
         return completed
 
+    async def _complete_prepared_send(
+        self, *, follow_id: int, claim_token: str, prepared: PreparedPersonFollow,
+    ) -> str:
+        """Finalize a guarded Follow send without changing its ActivityPub identity."""
+        try:
+            await self.gateway.send_prepared_person_follow(prepared)
+            next_status, last_error = 'sent', None
+        except FollowNotDispatchedError as error:
+            # Gateway proved the key/preflight failure occurred before any
+            # network side effect; the same Follow can be attempted again.
+            next_status, last_error = 'prepared', str(error)
+        except Exception as error:
+            # A timeout can follow acceptance; keep ambiguous state instead of
+            # generating a duplicate ActivityPub Follow.
+            next_status, last_error = 'uncertain', str(error)
+        with self.database.immediate_session() as session:
+            row = session.get(RemotePersonFollow, follow_id)
+            if (row is not None and row.follow_claim_token == claim_token
+                    and row.follow_dispatch_state == 'sending'):
+                row.follow_dispatch_state = next_status
+                row.follow_claim_token = None
+                row.last_error = last_error
+        return next_status
+
+    async def dispatch_prepared_for(
+        self, *, follow_id: int, follow_activity_id: str,
+    ) -> int:
+        """Attempt only the still-prepared generation returned by this command.
+
+        The exact Follow row and immutable ActivityPub id are checked inside
+        BEGIN IMMEDIATE; an already-sending, cancelled or superseded generation
+        never crosses the network boundary a second time.
+        """
+        token = uuid4().hex
+        with self.database.immediate_session() as session:
+            row = session.get(RemotePersonFollow, follow_id)
+            if (row is None or row.follow_activity_id != follow_activity_id
+                    or row.relationship_status != 'pending'
+                    or row.follow_dispatch_state != 'prepared'):
+                return 0
+            assignments = session.scalars(select(RemotePersonChannelAssignment).where(
+                RemotePersonChannelAssignment.follow_id == follow_id)).all()
+            # A removed last assignment is not authorization to resurrect a
+            # signed Follow, even if a stale prepared state survives a race.
+            if (not assignments or not any(
+                self.policy_service.is_discord_guild_allowed(item.discord_guild_id)
+                for item in assignments
+            )):
+                return 0
+            if not self._federation_allowed(row.remote_actor_id, row.remote_inbox_url):
+                row.last_error = 'federation policy denied outbound Follow'
+                return 0
+            user = session.get(User, row.user_id)
+            if user is None:
+                raise ValueError('persisted Follow has no local Person owner')
+            row.follow_dispatch_state = 'sending'
+            row.follow_claim_token = token
+            prepared = PreparedPersonFollow(
+                actor_username=user.activitypub_username,
+                actor_url=user.actor_url,
+                remote_actor_id=row.remote_actor_id,
+                remote_inbox_url=row.remote_inbox_url,
+                follow_activity_id=row.follow_activity_id,
+            )
+        # Transport occurs only after the transaction commits the claim.
+        result = await self._complete_prepared_send(
+            follow_id=follow_id, claim_token=token, prepared=prepared)
+        return int(result == 'sent')
+
     async def dispatch_prepared(self, limit: int = 20) -> int:
         """Dispatch at most ``limit`` potentially sent Follow activities.
 
@@ -300,31 +369,14 @@ class RemotePersonFollowService:
                     follow_activity_id=row.follow_activity_id,
                 )
                 row_id = row.id
-            try:
-                await self.gateway.send_prepared_person_follow(prepared)
-                next_status, last_error = 'sent', None
+            next_status = await self._complete_prepared_send(
+                follow_id=row_id, claim_token=token, prepared=prepared)
+            if next_status == 'sent':
                 completed += 1
-            except FollowNotDispatchedError as error:
-                # Gateway proved it never attempted the network send. A
-                # same-ID retry is safe; avoid a hot loop in this invocation.
-                next_status, last_error = 'prepared', str(error)
-            except Exception as error:
-                # HTTP timeouts or errors may follow a successful remote send;
-                # marking uncertain prevents a duplicate Follow on restart.
-                next_status, last_error = 'uncertain', str(error)
-            # Only a successful or potentially transmitted Follow consumes the
-            # network budget. A proven pre-send rejection must not starve the
-            # next eligible row when a slash command requests limit=1.
+            # Only a successful or possibly transmitted Follow consumes the
+            # network budget; a proved preflight failure can be retried later.
             if next_status != 'prepared':
                 attempted += 1
-            with self.database.immediate_session() as session:
-                row = session.get(RemotePersonFollow, row_id)
-                if row is not None and row.follow_claim_token == token and row.follow_dispatch_state == 'sending':
-                    row.follow_dispatch_state = next_status
-                    row.follow_claim_token = None
-                    row.last_error = last_error
-            # A proved pre-network failure stays prepared under its original
-            # ID, but must not starve younger independent Follow generations.
         return completed
 
 

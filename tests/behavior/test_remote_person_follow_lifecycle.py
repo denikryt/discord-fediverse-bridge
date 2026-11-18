@@ -111,6 +111,88 @@ class FollowLifecycleScenarios(unittest.TestCase):
         forged = event.model_copy(update={'actor_id': 'https://attacker.example/user'})
         self.assertEqual(asyncio.run(handle_follow_lifecycle(forged, runtime)).status, 'skipped')
 
+    def test_repeated_prepared_follow_targets_its_own_activity_after_key_recovery(self):
+        """Repeating B cannot dispatch older prepared A through a global limit=1 scan."""
+        a = self.subscribe()
+        b = self.subscribe('charlie', 101)
+        same_b = self.subscribe('charlie', 101)
+        self.assertEqual((same_b.status, same_b.follow_id, same_b.follow_activity_id),
+                         ('already_assigned', b.follow_id, b.follow_activity_id))
+        with self.db.session() as session:
+            generation = session.get(RemotePersonFollow, b.follow_id).generation
+        def missing_key(request):
+            """The gateway rejects signing before any network submission."""
+            if request.follow_activity_id == b.follow_activity_id:
+                raise FollowNotDispatchedError('signing key unavailable')
+        self.gateway.on_send = missing_key
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared_for(
+            follow_id=same_b.follow_id, follow_activity_id=same_b.follow_activity_id)), 0)
+        self.assertEqual(self.status(b.follow_id)[1], 'prepared')
+        self.gateway.on_send = None
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared_for(
+            follow_id=same_b.follow_id, follow_activity_id=same_b.follow_activity_id)), 1)
+        self.assertEqual([x.follow_activity_id for x in self.gateway.sends],
+                         [b.follow_activity_id, b.follow_activity_id])
+        self.assertEqual(self.status(a.follow_id)[1], 'prepared')
+        self.assertEqual(self.status(b.follow_id)[1], 'sent')
+        with self.db.session() as session:
+            row = session.get(RemotePersonFollow, b.follow_id)
+            self.assertEqual((row.follow_activity_id, row.generation), (b.follow_activity_id, generation))
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared_for(
+            follow_id=b.follow_id, follow_activity_id=b.follow_activity_id)), 0)
+        self.assertEqual(len(self.gateway.sends), 2)
+
+    def test_targeted_follow_rejects_old_generation_and_concurrent_repeats(self):
+        """Only one guarded prepared generation can enter the outbound network."""
+        old = self.subscribe()
+        self.assertEqual(self.service.cancel_follow(
+            discord_user_id='alice', remote_actor_id=ACTOR), 'cancel_requested')
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared_for(
+            follow_id=old.follow_id, follow_activity_id=old.follow_activity_id)), 0)
+        # The existing Undo path settles a never-sent Follow locally before
+        # permitting the next generation to reserve the same Person.
+        self.assertEqual(asyncio.run(self.service.dispatch_cancellations()), 0)
+        fresh = self.subscribe()
+        self.assertNotEqual(old.follow_activity_id, fresh.follow_activity_id)
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared_for(
+            follow_id=old.follow_id, follow_activity_id=old.follow_activity_id)), 0)
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared_for(
+            follow_id=fresh.follow_id, follow_activity_id=old.follow_activity_id)), 0)
+        async def repeat_twice():
+            """Hold A at the real network await while B checks durable sending."""
+            started, release = asyncio.Event(), asyncio.Event()
+            async def slow_gateway(request):
+                """Simulate an in-flight Follow POST after the SQLite claim commits."""
+                self.gateway.sends.append(request)
+                started.set()
+                await release.wait()
+            self.gateway.send_prepared_person_follow = slow_gateway
+            first = asyncio.create_task(self.service.dispatch_prepared_for(
+                follow_id=fresh.follow_id, follow_activity_id=fresh.follow_activity_id))
+            await started.wait()
+            self.assertEqual(self.status(fresh.follow_id)[1], 'sending')
+            second = await self.service.dispatch_prepared_for(
+                follow_id=fresh.follow_id, follow_activity_id=fresh.follow_activity_id)
+            release.set()
+            return [await first, second]
+        self.assertEqual(sorted(asyncio.run(repeat_twice())), [0, 1])
+        self.assertEqual([x.follow_activity_id for x in self.gateway.sends], [fresh.follow_activity_id])
+
+    def test_targeted_ambiguous_follow_never_sends_again(self):
+        """A gateway timeout after network start forbids immediate same-ID retry."""
+        pending = self.subscribe()
+        def timeout(_request):
+            """Model the lost response after a possibly accepted Follow."""
+            raise TimeoutError('response lost after network transmission')
+        self.gateway.on_send = timeout
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared_for(
+            follow_id=pending.follow_id, follow_activity_id=pending.follow_activity_id)), 0)
+        self.assertEqual(self.status(pending.follow_id)[1], 'uncertain')
+        self.gateway.on_send = None
+        self.assertEqual(asyncio.run(self.service.dispatch_prepared_for(
+            follow_id=pending.follow_id, follow_activity_id=pending.follow_activity_id)), 0)
+        self.assertEqual(len(self.gateway.sends), 1)
+
     def test_blocked_old_follow_does_not_starve_new_authorized_follow(self):
         """A denied prepared Follow must not stop an unrelated queued sender."""
         blocked = self.subscribe()

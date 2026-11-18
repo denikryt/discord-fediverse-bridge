@@ -104,9 +104,13 @@ def register(
             return
         # The durable reservation exists before transport; a refused network
         # attempt never requires a replacement Follow identity.
-        if result.status == 'prepared':
+        if (result.status in ('prepared', 'already_assigned')
+                and result.follow_id is not None and result.follow_activity_id is not None):
             try:
-                await follow_service.dispatch_prepared(limit=1)
+                # Repeat the caller's still-prepared Follow, not whichever
+                # unrelated prepared row happens to lead the global queue.
+                await follow_service.dispatch_prepared_for(
+                    follow_id=result.follow_id, follow_activity_id=result.follow_activity_id)
             except Exception:
                 logger.exception('Immediate Person Follow dispatch failed; reservation retained')
         status = {
