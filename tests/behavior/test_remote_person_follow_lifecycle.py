@@ -69,16 +69,16 @@ class FollowLifecycleScenarios(unittest.TestCase):
         self.channels = RemotePersonChannelService(self.db)
         self.flags = SimpleNamespace(**{name: True for name in REQUIRED_BOT_PERMISSIONS})
 
-    def subscribe(self, user='alice', channel=100):
+    def subscribe(self, user='alice', channel=100, guild=1):
         """Reserve one local Person Follow with a concrete guild destination."""
         return asyncio.run(self.service.follow(discord_user_id=user, actor='@bob@remote.example',
-            discord_guild_id=1, discord_channel_id=channel, target_channel_guild_id=1,
+            discord_guild_id=guild, discord_channel_id=channel, target_channel_guild_id=guild,
             channel_type='text', caller_can_manage_guild=True, bot_permissions=self.flags))
 
-    def remove(self, user='alice', channel=100):
+    def remove(self, user='alice', channel=100, guild=1):
         """Remove only one user's assignment with a serialized DB writer."""
         return self.channels.remove_channel(discord_user_id=user, remote_actor_id=ACTOR,
-            discord_guild_id=1, discord_channel_id=channel)
+            discord_guild_id=guild, discord_channel_id=channel)
 
     def status(self, follow_id):
         """Inspect orthogonal relationship, Follow and Undo transport states."""
@@ -412,15 +412,29 @@ class FollowLifecycleScenarios(unittest.TestCase):
         self.assertEqual(self.service.apply_remote_decision(old.follow_activity_id, ACTOR, 'accepted'), 'unmatched')
         self.assertEqual(self.status(newer.follow_id)[0], 'pending')
 
+    def test_initial_follow_rejects_same_guild_second_channel_and_reuses_identity(self):
+        """The Follow path itself blocks a conflicting destination before dispatch."""
+        first = self.subscribe(channel=100)
+        self.assertEqual(first.status, 'prepared')
+        self.assertEqual(self.subscribe(channel=101).status, 'guild_assignment_conflict')
+        other = self.subscribe(channel=201, guild=2)
+        self.assertEqual(other.status, 'assigned_existing')
+        self.assertEqual(other.follow_activity_id, first.follow_activity_id)
+        with self.db.session() as session:
+            assignments = session.scalars(select(RemotePersonChannelAssignment).where(
+                RemotePersonChannelAssignment.follow_id == first.follow_id)).all()
+            self.assertEqual({(a.discord_guild_id, a.discord_channel_id) for a in assignments},
+                             {(1, 100), (2, 201)})
+
     def test_retain_follow_until_last_of_two_channels_removed(self):
         """Removing one of two channels never cancels a still active Follow."""
         one = self.subscribe()
-        self.subscribe(channel=101)
+        self.subscribe(channel=101, guild=2)
         asyncio.run(self.service.dispatch_prepared())
         self.remove(channel=100)
         self.assertEqual(asyncio.run(self.service.dispatch_cancellations()), 0)
         self.assertEqual(self.status(one.follow_id)[0], 'pending')
-        self.remove(channel=101)
+        self.remove(channel=101, guild=2)
         self.assertEqual(asyncio.run(self.service.dispatch_cancellations()), 1)
 
 

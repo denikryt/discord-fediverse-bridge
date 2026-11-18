@@ -255,3 +255,36 @@ python -m src.db.backup restore \
 
 The restored database remains at v0. Start only the intended application
 version after confirming that all other database writers remain stopped.
+
+### Development v2 schema alignment for per-Follow/guild destinations
+
+The development v2 schema now rejects a second channel for the same
+`(follow_id, discord_guild_id)`. Separate follows may still share channels,
+and one Follow may have destinations in different guilds. Fresh v2 databases
+and the existing v1→v2 upgrade create this constraint automatically; schema
+version remains **2**. An older *physical* v2 database is **not** upgraded
+silently: startup rejects its outdated fingerprint.
+
+Before deploying this development revision to an existing v2 volume, **stop
+all writers**, obtain the owner's explicit authorization, and take a verified
+full database/media backup. Audit a read-only copy for conflicts:
+
+```sql
+SELECT follow_id, discord_guild_id, COUNT(*) AS assignments
+FROM remote_person_channel_assignments
+GROUP BY follow_id, discord_guild_id
+HAVING COUNT(*) > 1;
+```
+
+If rows are returned, resolve their destination ownership with the owner;
+never delete a user's assignment automatically. The owner must then authorize
+either an offline SQLite table rebuild to the *exact* new v2 DDL (including
+both unique constraints and existing FKs/indexes) or a complete **development**
+DB reset. A standalone `CREATE UNIQUE INDEX` is **not** an equivalent physical
+schema snapshot and may fail strict fingerprint validation. Do not perform a
+reset or alignment as an application startup side effect.
+
+After the approved offline operation, check `PRAGMA user_version` (=2),
+`PRAGMA integrity_check` (=ok), `PRAGMA foreign_key_check` (empty), and that
+startup accepts the frozen v2 physical fingerprint. Verify an immediate
+second startup is read-only and does not create a new migration backup.

@@ -125,6 +125,15 @@ class RemotePersonFollowService:
             ))
             if already is not None:
                 return RemotePersonFollowResult('already_assigned', current.follow_activity_id, current.id)
+            # The Follow owns at most one destination in each guild. This
+            # check and the insert share the serialized writer transaction.
+            guild_assignment = session.scalar(select(RemotePersonChannelAssignment).where(
+                RemotePersonChannelAssignment.follow_id == current.id,
+                RemotePersonChannelAssignment.discord_guild_id == discord_guild_id,
+            ))
+            if guild_assignment is not None:
+                return RemotePersonFollowResult(
+                    'guild_assignment_conflict', current.follow_activity_id, current.id)
             session.add(RemotePersonChannelAssignment(
                 follow_id=current.id, discord_guild_id=discord_guild_id,
                 discord_channel_id=discord_channel_id,

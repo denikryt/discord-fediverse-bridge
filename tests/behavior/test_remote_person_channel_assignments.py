@@ -12,7 +12,7 @@ from sqlalchemy import select
 from src.db import Database
 from src.channel_ownership import resolve_channel_owner
 from src.models import (
-    User, RemotePersonFollow, RemotePersonPost, RemotePersonPostDelivery,
+    User, RemotePersonFollow, RemotePersonChannelAssignment, RemotePersonPost, RemotePersonPostDelivery,
     RemotePersonCommentPlacement, InboundConversationObject, PersonalFeedBinding,
 )
 from src.personal_feeds import PersonalFeedService
@@ -60,8 +60,8 @@ class RemoteChannelAssignmentScenarios(unittest.TestCase):
         """Perform one authorized assignment with explicit channel facts."""
         return self.remote.add_channel(
             discord_user_id=str(owner), remote_actor_id=REMOTE,
-            discord_guild_id=1, discord_channel_id=channel,
-            target_channel_guild_id=kwargs.get("guild_id", 1),
+            discord_guild_id=kwargs.get("guild_id", 1), discord_channel_id=channel,
+            target_channel_guild_id=kwargs.get("target_guild_id", kwargs.get("guild_id", 1)),
             channel_type=kwargs.get("type", "text"),
             caller_can_manage_guild=kwargs.get("manager", True),
             bot_permissions=kwargs.get("perms", permissions()),
@@ -135,6 +135,39 @@ class RemoteChannelAssignmentScenarios(unittest.TestCase):
         self.assertEqual(independent.status, "assigned")
         self.assertNotEqual(self.add(101).follow_id, independent.follow_id)
 
+    def test_same_follow_different_channel_same_guild_rejected_without_mutation(self) -> None:
+        """A Follow has one guild destination; another guild keeps its own link."""
+        first = self.add(101, 111)
+        self.assertEqual(first.status, "assigned")
+        self.assertEqual(self.add(101, 111).status, "already_assigned")
+        self.assertEqual(self.add(101, 112).status, "guild_assignment_conflict")
+        other = self.add(101, 222, guild_id=2)
+        self.assertEqual(other.status, "assigned")
+        self.assertEqual(other.follow_id, first.follow_id)
+        with self.db.session() as session:
+            rows = session.scalars(select(RemotePersonChannelAssignment).where(
+                RemotePersonChannelAssignment.follow_id == first.follow_id)).all()
+            self.assertEqual({(r.discord_guild_id, r.discord_channel_id) for r in rows},
+                             {(1, 111), (2, 222)})
+        self.assertEqual(self.add(102, 112).status, "assigned")
+
+    def test_concurrent_same_follow_same_guild_has_single_winner(self) -> None:
+        """Serial database admissions reject one competing channel without leaking it."""
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        gate = Barrier(2)
+        def try_assign(channel: int):
+            """Start simultaneous user requests against the real immediate writer."""
+            gate.wait()
+            return self.add(101, channel)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(try_assign, 111)
+            b = pool.submit(try_assign, 112)
+            statuses = {a.result().status, b.result().status}
+        self.assertEqual(statuses, {'assigned', 'guild_assignment_conflict'})
+        with self.db.session() as session:
+            self.assertEqual(len(session.scalars(select(RemotePersonChannelAssignment)).all()), 1)
+
     def test_personal_feed_then_remote_feed_is_refused(self) -> None:
         """An existing exclusive personal root cannot turn into shared delivery."""
         self.assertEqual(self.personal.bind_or_move("103", 1, 111).status, "bound")
@@ -145,7 +178,7 @@ class RemoteChannelAssignmentScenarios(unittest.TestCase):
 
     def test_discord_channel_capabilities_and_owner_rights_are_mandatory(self) -> None:
         """Cannot route into foreign guild, forbidden channel type, or unreadable thread."""
-        self.assertEqual(self.add(101, guild_id=2).status, "invalid_target")
+        self.assertEqual(self.add(101, guild_id=1, target_guild_id=2).status, "invalid_target")
         self.assertEqual(self.add(101, type="forum").status, "invalid_target")
         self.assertEqual(self.add(101, manager=False).status, "forbidden")
         for flag in REQUIRED_BOT_PERMISSIONS:

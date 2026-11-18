@@ -50,16 +50,16 @@ class PersonCommandOwnershipScenarios(unittest.TestCase):
         self.channel = RemotePersonChannelService(self.db)
         self.flags = SimpleNamespace(**{name: True for name in REQUIRED_BOT_PERMISSIONS})
 
-    def subscribe(self, user, channel):
+    def subscribe(self, user, channel, guild=1):
         """Perform the validated service path corresponding to /person-feed follow."""
         return asyncio.run(self.follow.follow(discord_user_id=user, actor='@bob@remote.example',
-            discord_guild_id=1, discord_channel_id=channel, target_channel_guild_id=1,
+            discord_guild_id=guild, discord_channel_id=channel, target_channel_guild_id=guild,
             channel_type='text', caller_can_manage_guild=True, bot_permissions=self.flags))
 
     def test_unfollow_cancels_only_caller_across_multiple_channels(self):
         """A cancels their multi-channel Follow without cancelling B's Follow."""
         first = self.subscribe('alice', 100)
-        self.assertEqual(self.subscribe('alice', 101).status, 'assigned_existing')
+        self.assertEqual(self.subscribe('alice', 101, guild=2).status, 'assigned_existing')
         other = self.subscribe('bob', 100)
         self.assertEqual(self.follow.cancel_follow(discord_user_id='alice',
             remote_actor_id='https://remote.example/users/bob'), 'cancel_requested')

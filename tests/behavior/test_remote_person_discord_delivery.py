@@ -116,7 +116,7 @@ class RemotePersonDiscordDeliveryScenarios(unittest.TestCase):
                     discord_channel_id=100, discord_guild_id=1))
                 if user_ix == 1:
                     session.add(RemotePersonChannelAssignment(follow_id=follow.id,
-                        discord_channel_id=101, discord_guild_id=1))
+                        discord_channel_id=101, discord_guild_id=2))
 
     def event(self, operation='created', *, when=None):
         """Build the signed-event shape the gateway passes to Python."""

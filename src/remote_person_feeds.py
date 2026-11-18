@@ -133,6 +133,15 @@ class RemotePersonChannelService:
                 ))
                 if previous is not None:
                     return RemotePersonChannelResult("already_assigned", follow.id, previous.id)
+                # Validate cardinality at admission before mutating either
+                # assignment or Follow; SQLite also enforces it for other writers.
+                assigned_guild = session.scalar(select(RemotePersonChannelAssignment).where(
+                    RemotePersonChannelAssignment.follow_id == follow.id,
+                    RemotePersonChannelAssignment.discord_guild_id == discord_guild_id,
+                ))
+                if assigned_guild is not None:
+                    return RemotePersonChannelResult(
+                        "guild_assignment_conflict", follow.id, assigned_guild.id)
                 owner = resolve_channel_owner(session, discord_channel_id)
                 if owner is not None and owner.kind != "remote_person_feed":
                     return RemotePersonChannelResult("channel_conflict", follow.id, conflict_kind=owner.kind)

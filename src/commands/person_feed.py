@@ -122,6 +122,7 @@ def register(
             'federation_denied': 'Federation policy does not permit this Person or their inbox.',
             'guild_denied': 'This server is not permitted by bridge policy.',
             'channel_conflict': 'Channel belongs to another bridge mode.',
+            'guild_assignment_conflict': 'This Follow already has a destination in this server; remove that assignment first.',
         }.get(result.status, f'Follow was not created: {result.status}.')
         await interaction.edit_original_response(content=status)
 
@@ -146,6 +147,7 @@ def register(
             'already_assigned': 'That destination is already assigned.',
             'missing_bot_permissions': 'The bot lacks channel permissions: ' + ', '.join(result.missing_permissions),
             'channel_conflict': 'Channel belongs to another bridge mode.',
+            'guild_assignment_conflict': 'This Follow already has a destination in this server; remove that assignment first.',
             'not_following': 'You have no active Follow for that exact Actor ID.',
         }.get(result.status, f'Assignment not changed: {result.status}.'))
 

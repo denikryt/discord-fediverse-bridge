@@ -65,7 +65,7 @@ class RemotePersonComments(unittest.TestCase):
             session.flush()
             for channel in (100, 101):
                 session.add(RemotePersonChannelAssignment(follow_id=follow.id,
-                    discord_guild_id=1, discord_channel_id=channel))
+                    discord_guild_id=(1 if channel == 100 else 2), discord_channel_id=channel))
         self.roots = RemotePersonInboundService(self.db)
         self.comments = RemotePersonCommentService(self.db)
         root = {'id': NOTE, 'type': 'Note', 'attributedTo': BOB,
@@ -119,7 +119,7 @@ class RemotePersonComments(unittest.TestCase):
             def snapshot(self):
                 return self
             def is_discord_guild_allowed(self, guild):
-                return guild == 1
+                return guild in (1, 2)
             def federation_decision(self, actor):
                 return SimpleNamespace(allowed=True)
         transport = Transport()
@@ -362,7 +362,7 @@ class RemotePersonComments(unittest.TestCase):
         class Policy:
             """Permit authorized public remote-Person and guild routing."""
             def is_discord_guild_allowed(self, guild_id):
-                return guild_id == 1
+                return guild_id in (1, 2)
             def federation_decision(self, actor_id):
                 return SimpleNamespace(allowed=True)
             def snapshot(self):
@@ -414,7 +414,7 @@ class RemotePersonComments(unittest.TestCase):
         if unbind_before_delivery:
             removal = RemotePersonChannelService(self.db).remove_channel(
                 discord_user_id='42', remote_actor_id=BOB,
-                discord_guild_id=1, discord_channel_id=101)
+                discord_guild_id=2, discord_channel_id=101)
             self.assertEqual(removal.status, 'removed')
             with self.db.session() as session:
                 pending_copy = session.scalar(select(RemotePersonPostDelivery).where(
@@ -519,7 +519,7 @@ class RemotePersonComments(unittest.TestCase):
         self.assertEqual({call.channel_id: call.parent_message_id for call in edge.calls[1:]}, expected)
         # A Discord Reply in B to A's bot mirror maps to the same canonical
         # AP parent and creates one new local Note, never a new copy of A.
-        reply_in_b = SimpleNamespace(id=90223, guild=SimpleNamespace(id=1),
+        reply_in_b = SimpleNamespace(id=90223, guild=SimpleNamespace(id=2),
             channel=SimpleNamespace(id=80101, parent_id=101),
             author=SimpleNamespace(id=42), content='Reply to mirror',
             reference=SimpleNamespace(message_id=1010001), created_at=self.when)
@@ -608,7 +608,7 @@ class RemotePersonComments(unittest.TestCase):
     def test_denied_destination_keeps_other_accepted_copy(self):
         """Guild policy rejects only the forbidden target of a signed reply."""
         result = self.comments.reserve(self.event(), guild_allowed=lambda guild: guild == 1)
-        self.assertEqual(result.targets, 2)
+        self.assertEqual(result.targets, 1)
         # A denied guild for this transaction must not reserve even an AP row.
         another = self.comments.reserve(self.event(
             object_id='https://other.example/notes/denied'),

@@ -164,6 +164,60 @@ class VersionTwoMigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "physical schema differs"):
             db.migrate()
 
+    def test_existing_old_v2_shape_requires_explicit_alignment(self) -> None:
+        """Version 2 alone cannot admit an older physical table shape."""
+        frozen = Path(__file__).resolve().parents[1] / "src/db/schema_versions/v2.sql"
+        current_ddl = frozen.read_text()
+        constraint = "\tCONSTRAINT uq_remote_person_assignment_follow_guild UNIQUE (follow_id, discord_guild_id),\n"
+        self.assertIn(constraint, current_ddl)
+        with sqlite3.connect(self.path) as connection:
+            # Represent the actual pre-change v2 shape without auto-repairing it.
+            connection.executescript(current_ddl.replace(constraint, ""))
+            connection.execute("PRAGMA user_version=2")
+        db = Database(f"sqlite:///{self.path}")
+        self.addCleanup(db.close)
+        with self.assertRaisesRegex(RuntimeError, "physical schema differs"):
+            db.migrate()
+
+    def test_follow_guild_cardinality_is_sql_enforced_on_fresh_v2(self) -> None:
+        """Direct INSERT cannot bypass per-Follow/guild assignment admission."""
+        db = Database(f"sqlite:///{self.path}")
+        self.addCleanup(db.close)
+        db.migrate()
+        with db.session() as session:
+            actor = "https://bridge.test/actors/users/alice"
+            user = User(discord_user_id="1", activitypub_username="alice", actor_url=actor,
+                        inbox_url=f"{actor}/inbox", outbox_url=f"{actor}/outbox",
+                        followers_url=f"{actor}/followers", public_key_pem="public",
+                        private_key_pem="private")
+            session.add(user)
+            session.flush()
+            for name in ("bob", "charlie"):
+                session.add(RemotePersonFollow(
+                    user_id=user.id, remote_actor_id=f"https://remote.test/users/{name}",
+                    remote_inbox_url="https://remote.test/inbox",
+                    follow_activity_id=f"https://bridge.test/follows/{name}",
+                    generation=1, relationship_status="accepted"))
+        with db.session() as session:
+            bob, charlie = session.query(RemotePersonFollow).order_by(RemotePersonFollow.id).all()
+            session.add(RemotePersonChannelAssignment(
+                follow_id=bob.id, discord_guild_id=1, discord_channel_id=100))
+        with self.assertRaises(IntegrityError):
+            with db.session() as session:
+                session.add(RemotePersonChannelAssignment(
+                    follow_id=bob.id, discord_guild_id=1, discord_channel_id=101))
+        with db.session() as session:
+            # Another guild and another Follow remain independent.
+            session.add(RemotePersonChannelAssignment(
+                follow_id=bob.id, discord_guild_id=2, discord_channel_id=200))
+            session.add(RemotePersonChannelAssignment(
+                follow_id=charlie.id, discord_guild_id=1, discord_channel_id=100))
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM remote_person_channel_assignments").fetchone()[0], 3)
+        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v2")
+
     def test_constraints_reject_invalid_or_duplicated_remote_identity(self) -> None:
         """Follow generations, placement XOR, context and root identity are SQL-enforced."""
         db = Database(f"sqlite:///{self.path}")

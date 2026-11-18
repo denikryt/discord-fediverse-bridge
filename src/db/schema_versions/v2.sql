@@ -553,6 +553,7 @@ CREATE TABLE remote_person_channel_assignments (
 	created_at DATETIME NOT NULL,
 	PRIMARY KEY (id),
 	UNIQUE (follow_id, discord_channel_id),
+	CONSTRAINT uq_remote_person_assignment_follow_guild UNIQUE (follow_id, discord_guild_id),
 	FOREIGN KEY(follow_id) REFERENCES remote_person_follows (id) ON DELETE CASCADE
 );
 CREATE TABLE remote_person_comment_placements (

@@ -1622,6 +1622,9 @@ class RemotePersonChannelAssignment(Base):
     __tablename__ = "remote_person_channel_assignments"
     __table_args__ = (
         UniqueConstraint("follow_id", "discord_channel_id"),
+        # One Follow may appear in many guilds but only once within each.
+        UniqueConstraint("follow_id", "discord_guild_id",
+                         name="uq_remote_person_assignment_follow_guild"),
         Index("ix_remote_person_assignments_target", "discord_guild_id", "discord_channel_id"),
     )
 
