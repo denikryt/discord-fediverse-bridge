@@ -44,7 +44,7 @@ class RemotePersonInboundScenarios(unittest.TestCase):
                 session.flush()
                 for cid in ((100, 101) if n == 0 else (100,)):
                     session.add(RemotePersonChannelAssignment(follow_id=follow.id,
-                        discord_channel_id=cid, discord_guild_id=1))
+                        discord_channel_id=cid, discord_guild_id=(1 if cid == 100 else 2)))
 
     def event(self, operation='created', *, actor=ACTOR, attribution=ACTOR,
               public=True, object_id=OBJECT, when=None):

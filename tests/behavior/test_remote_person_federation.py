@@ -65,7 +65,8 @@ class UserFollowScenarios(unittest.TestCase):
     async def start(self, user=101, actor='@bob@fediverse.example', channel=10, **params):
         """Request Follow and first channel through the real service."""
         return await self.service.follow(discord_user_id=str(user), actor=actor,
-            discord_guild_id=1, discord_channel_id=channel, target_channel_guild_id=1,
+            discord_guild_id=params.get('guild', 1), discord_channel_id=channel,
+            target_channel_guild_id=params.get('guild', 1),
             channel_type='text', caller_can_manage_guild=params.get('manager', True),
             bot_permissions=params.get('permissions', self.flags))
 
@@ -126,15 +127,17 @@ class UserFollowScenarios(unittest.TestCase):
             self.assertEqual(session.query(RemotePersonFollow).count(), 0)
 
     def test_duplicate_owner_reuses_original_follow_without_network_replay(self):
-        """Adding a second channel cannot synthesize a second Follow generation."""
+        """A different guild reuses the same Follow and its ActivityPub identity."""
         one = asyncio.run(self.start())
-        second = asyncio.run(self.start(channel=11))
+        second = asyncio.run(self.start(channel=11, guild=2))
         self.assertEqual(second.follow_activity_id, one.follow_activity_id)
         self.assertEqual(second.status, 'assigned_existing')
         self.assertEqual(len(self.gateway.lookups), 2)
         self.assertEqual(asyncio.run(self.service.dispatch_prepared()), 1)
         with self.db.session() as session:
-            self.assertEqual(session.query(RemotePersonChannelAssignment).count(), 2)
+            assignments = session.query(RemotePersonChannelAssignment).all()
+            self.assertEqual({(row.discord_guild_id, row.discord_channel_id)
+                              for row in assignments}, {(1, 10), (2, 11)})
 
     def test_unknown_network_send_is_not_blindly_repeated(self):
         """Ambiguous POST outcome keeps the exact Follow ID in uncertain state."""
