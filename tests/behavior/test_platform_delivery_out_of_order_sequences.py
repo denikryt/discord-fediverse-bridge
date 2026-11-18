@@ -7,10 +7,14 @@ receipts, scope checks and coordinator restart use their production classes.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 import json
 import os
+import signal
+import time
 from pathlib import Path
 import subprocess
+import unittest
 import sys
 
 from sqlalchemy import select
@@ -210,6 +214,129 @@ finally:
         self.assertEqual(result['states']['100'], 'delivered')
         self.assertEqual(result['copies'], ['created-100'])
         self.assertEqual(self.adapter.posts, ['100', '300'])
+
+    @unittest.skipUnless(os.name == 'posix', 'the crash barrier requires POSIX SIGKILL')
+    def test_crash_inside_accepted_create_before_ack_never_reposts(self) -> None:
+        """A killed worker leaves its committed claim uncertain, not retryable."""
+        self.assertTrue(asyncio.run(self._deliver('A')))
+        self.assertEqual(self.adapter.posts, ['100'])
+        root = Path(__file__).resolve().parents[2]
+        db_path = str(self.database.engine.url)
+        side_effect = Path(self.database.engine.url.database).with_suffix('.physical.jsonl')
+        # The subprocess executes the real coordinator and a committed
+        # dispatch claim. Its controlled provider durably records the physical
+        # Create, then blocks without returning an ACK. A parent-side SIGKILL
+        # interrupts the actual in-flight SDK await, not a later retry.
+        child_script = """
+import asyncio, json, os, sys
+from src.db import Database
+from src.content_sync.platform_fanout import PlatformFanoutCoordinator
+from src.platform_types import ChannelRef, ContentDocument, DeliveryPresentation
+from tests.behavior.test_platform_message_fanout_scenarios import _Registry
+
+class AcceptedThenKilled:
+    '''Record an accepted external Create and deliberately withhold its ACK.'''
+
+    async def create_forum_thread(self, forum, content, *, title, presentation, attempt):
+        '''Fsync the physical effect before blocking inside the SDK await.'''
+        with open(sys.argv[4], 'a', encoding='utf-8') as physical:
+            physical.write(json.dumps({'attempt':attempt.key,
+                'forum':forum.external_channel_id}) + '\\n')
+            physical.flush()
+            os.fsync(physical.fileno())
+        await asyncio.Event().wait()  # Provider accepted Create; acknowledgement withheld.
+
+db=Database(sys.argv[1]); forum=ChannelRef('discord-primary', sys.argv[2], 'forum', '1')
+coordinator=PlatformFanoutCoordinator(db, _Registry(AcceptedThenKilled()))
+asyncio.run(coordinator.stage_and_deliver(domain='local', kind='post',
+    canonical_id=int(sys.argv[3]), forum=forum, operation='forum_thread',
+    destination=forum, content=ContentDocument('human post from B'),
+    presentation=DeliveryPresentation('bot'), title='B source'))
+sys.exit(91)  # Unreachable unless the controlled provider returned an ACK.
+"""
+        child = subprocess.Popen(
+            [sys.executable, '-c', child_script, db_path, '300',
+             str(self.canonical_id), str(side_effect)],
+            cwd=root, env={**os.environ, 'PYTHONPATH': str(root)},
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            deadline = time.monotonic() + 15
+            # The fsynced side-effect file is the acceptance barrier; a poll
+            # alone would not prove that the remote provider committed Create.
+            while not side_effect.exists() and time.monotonic() < deadline:
+                self.assertIsNone(child.poll(), 'provider exited before accepting Create')
+                time.sleep(0.01)
+            self.assertTrue(side_effect.exists(), 'provider never reached Create barrier')
+            self.assertIsNone(child.poll(), 'the provider should still be awaiting ACK')
+            # Kill *from another process* during the unresolved SDK call.
+            child.kill()
+            _stdout, stderr = child.communicate(timeout=10)
+            self.assertEqual(child.returncode, -signal.SIGKILL, stderr)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.communicate(timeout=10)
+        accepted = [json.loads(line) for line in side_effect.read_text().splitlines()]
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted[0]['forum'], '300')
+        with self.database.session() as session:
+            rows = session.scalars(select(PlatformDeliveryIntent)).all()
+            states = {row.channel_surface_id: row.state for row in rows}
+            self.assertEqual(states[self.targets['A'][2]], 'delivered')
+            self.assertEqual(states[self.targets['C'][2]], 'dispatching')
+            c = next(row for row in rows if row.channel_surface_id == self.targets['C'][2])
+            self.assertIsNotNone(c.dispatch_token)
+            self.assertEqual(c.attempt_key, accepted[0]['attempt'])
+
+        # The original process no longer has an adapter cache or execution
+        # history. A new Python interpreter must not infer a missing POST.
+        restart_script = """
+import asyncio, json, sys
+from sqlalchemy import select
+from src.db import Database
+from src.content_sync.platform_fanout import PlatformFanoutCoordinator
+from src.models import PlatformDeliveryIntent, ChannelSurface
+from tests.behavior.test_platform_message_fanout_scenarios import _ForumAdapter, _Registry
+
+db=Database(sys.argv[1]); adapter=_ForumAdapter()
+try:
+    recovered=asyncio.run(PlatformFanoutCoordinator(db, _Registry(adapter)).recover_pending())
+    with db.session() as session:
+        states=dict(session.execute(select(ChannelSurface.external_channel_id,
+            PlatformDeliveryIntent.state).join(PlatformDeliveryIntent,
+            PlatformDeliveryIntent.channel_surface_id == ChannelSurface.id)).all())
+    print(json.dumps({'recovered':recovered, 'posts':adapter.posts, 'states':states}))
+finally:
+    db.close()
+"""
+        def restarted_state() -> dict:
+            """Read one cold process recovery decision and its physical effects."""
+            completed = subprocess.run(
+                [sys.executable, '-c', restart_script, db_path],
+                cwd=root, env={**os.environ, 'PYTHONPATH': str(root)},
+                text=True, capture_output=True, timeout=25, check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return json.loads(completed.stdout.strip())
+
+        first = restarted_state()
+        self.assertEqual(first['posts'], [])
+        self.assertEqual(first['recovered'], [])
+        self.assertEqual(first['states'], {'100': 'delivered', '300': 'dispatching'})
+        # Expiry is not evidence of failed delivery: force only the clock
+        # boundary and run a second fresh process to prove the durable fence.
+        with self.database.immediate_session() as session:
+            c = session.scalar(select(PlatformDeliveryIntent).where(
+                PlatformDeliveryIntent.channel_surface_id == self.targets['C'][2],
+            ))
+            c.lease_until = datetime.now(UTC) - timedelta(seconds=1)
+        second = restarted_state()
+        self.assertEqual(second['posts'], [])
+        self.assertEqual(second['recovered'], [])
+        self.assertEqual(second['states'], {'100': 'delivered', '300': 'unresolved'})
+        self.assertEqual(len(side_effect.read_text().splitlines()), 1)
+        self.assertEqual(self.adapter.posts, ['100'])
 
 
 if __name__ == '__main__':

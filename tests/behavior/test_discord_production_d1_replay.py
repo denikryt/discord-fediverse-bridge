@@ -7,6 +7,7 @@ claims are never replaced with hand-inserted source mappings.
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from datetime import UTC, datetime
@@ -249,6 +250,144 @@ class DiscordProductionD1Replay(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({row[4] for row in objects}, {'210'})
         self.assertEqual(self.runtime.fedify_gateway.render_community.await_count, 2)
 
+    async def test_subscribe_command_accept_and_replay_isolated_from_other_subscription(self) -> None:
+        """The registered slash callback owns Follow; only Accept enables its forum."""
+        from src.activitypub_handlers import dispatch_activitypub_event
+        from src.activitypub_models import FollowLifecycleEvent
+        from src.activitypub_identity_urls import build_service_follow_activity_id
+        from src.commands import subscribe
+        from src.community_discovery import ResolvedCommunity
+        from src.models import BridgeActorFollow, ChannelCommunitySubscription
+
+        class RecordingTree:
+            """Collect the actual slash callback instead of bypassing command registration."""
+
+            def __init__(self) -> None:
+                """Retain command callbacks registered by the production adapter."""
+                self.commands: dict[str, object] = {}
+
+            def command(self, *, name: str, description: str) -> object:
+                """Preserve command metadata while leaving its callback unmodified."""
+                def capture(callback: object) -> object:
+                    """Expose one decorated production callback for the scenario."""
+                    self.commands[name] = callback
+                    return callback
+                return capture
+
+        forum = _ObservedForum(self.guild, forum_id=101)
+        unrelated = _ObservedForum(self.guild, forum_id=102)
+        self.channels.update({101: forum, 102: unrelated})
+        forum.mention, unrelated.mention = '<#101>', '<#102>'
+        subscriptions = {
+            101: 'https://remote.test/c/hackers',
+            102: 'https://remote.test/c/unrelated',
+        }
+        tree = RecordingTree()
+        subscribe.register(
+            tree, self.runtime.database, self.runtime.fedify_gateway,
+            self.settings, self.runtime.bridge_policy_service,
+        )
+        callback = tree.commands['subscribe-community']
+        follow_calls: list[str] = []
+
+        async def resolve(_settings: object, *, instance_domain: object,
+                          community_value: str, **_kwargs: object) -> ResolvedCommunity:
+            """Resolve only the remote actor supplied by the moderator at the network edge."""
+            self.assertIn(community_value, subscriptions.values())
+            return ResolvedCommunity(
+                source='remote_lemmy', actor_id=community_value,
+                name=community_value.rsplit('/', 1)[-1], numeric_id=777,
+                handle='!' + community_value.rsplit('/', 1)[-1] + '@remote.test',
+            )
+
+        async def follow(actor_url: str) -> object:
+            """Capture one genuine Follow submission without a Fedify network dependency."""
+            follow_calls.append(actor_url)
+            return SimpleNamespace(
+                community_actor_url=actor_url,
+                community_inbox_url=actor_url + '/inbox',
+                follow_activity_id=build_service_follow_activity_id(
+                    origin=self.settings.normalized_fedify_origin, identifier='bridge',
+                    activity_id='subscription-' + actor_url.rsplit('/', 1)[-1],
+                ),
+            )
+
+        def interaction() -> object:
+            """Represent a registered moderator performing a Discord slash command."""
+            return SimpleNamespace(
+                guild=self.guild, guild_id=10,
+                user=SimpleNamespace(id=123, guild_permissions=SimpleNamespace(manage_guild=True)),
+                response=SimpleNamespace(send_message=AsyncMock()),
+            )
+
+        async def accepted(actor_url: str, delivery_suffix: str) -> object:
+            """Send the production inbound Accept handler one actor-owned Follow ID."""
+            result = await dispatch_activitypub_event(FollowLifecycleEvent(
+                event_type='follow.accepted',
+                delivery_id=f'https://remote.test/actors/system/activities/accept/{delivery_suffix}',
+                occurred_at=datetime(2026, 11, 18, tzinfo=UTC),
+                community_actor_id=actor_url, actor_id=actor_url,
+                object={'follow_activity_id': self.runtime.database.bridge_actor_follows
+                        .get_bridge_actor_follow(actor_url).follow_activity_id},
+            ), self.runtime)
+            return result
+
+        # Subscribe a distinct forum first so the tested destination cannot
+        # accidentally pass by being the only accepted subscription.
+        with (patch('src.commands.subscribe.resolve_selected_community', side_effect=resolve),
+              patch.object(self.runtime.fedify_gateway, 'follow_community', side_effect=follow),
+              patch.object(self.runtime.bot, 'fetch_user', new_callable=AsyncMock, create=True) as notify):
+            user = SimpleNamespace(send=AsyncMock())
+            notify.return_value = user
+            for channel in (unrelated, forum):
+                await callback(interaction(), community=subscriptions[channel.id],
+                               channel=channel, instance_domain=None)
+            self.assertEqual(follow_calls, list(subscriptions.values())[::-1])
+            self.assertEqual({row.status for row in
+                self.runtime.database.remote_subscriptions.list_subscriptions()}, {'pending'})
+            self.assertEqual((await accepted(subscriptions[102], 'other')).status, 'processed')
+            self.assertEqual(self.runtime.database.remote_subscriptions
+                             .get_subscription_by_channel(102).status, 'accepted')
+
+            # The desired channel is still pending although another actor is
+            # accepted. Pending is never permission to publish a human post.
+            thread = _ObservedThread(thread_id=210, forum=forum, starter=None)
+            thread.starter_message = _human_message(thread, 210)
+            thread.messages[210] = thread.starter_message
+            self.channels[210] = thread
+            await self.runtime.bot.on_thread_create(thread)
+            self.assertEqual(self._snapshot(), ((), ()))
+            self.runtime.fedify_gateway.render_community.assert_not_awaited()
+            self.assertEqual((await accepted(subscriptions[101], 'target')).status, 'processed')
+            self.assertEqual((await accepted(subscriptions[101], 'target-repeat')).status, 'skipped')
+            self.assertEqual(self.runtime.database.remote_subscriptions
+                             .get_subscription_by_channel(101).status, 'accepted')
+            await self.runtime.bot.on_thread_create(thread)
+            reply = _human_message(thread, 211, reply_to=210)
+            thread.messages[211] = reply
+            await self.runtime.bot.on_message(reply)
+            await self.runtime.bot.on_message(reply)
+            await self.runtime.bot.on_thread_create(thread)
+            objects, copies = self._snapshot()
+            self.assertEqual(len(objects), 2)
+            self.assertEqual(len(copies), 2)
+            root, comment = objects
+            self.assertEqual(comment[2], root[1])
+            self.assertEqual({row[4] for row in objects}, {'210'})
+            self.assertEqual({row[5] for row in objects}, {'210', '211'})
+            with self.runtime.database.session() as session:
+                published = session.scalars(select(PublishedActivityObject)).all()
+                self.assertEqual({row.community_actor_url for row in published},
+                                 {subscriptions[101]})
+                self.assertNotIn(subscriptions[102],
+                                 {row.community_actor_url for row in published})
+            self.assertEqual(self.runtime.fedify_gateway.render_community.await_count, 2)
+            with self.runtime.database.session() as session:
+                self.assertEqual(len(session.scalars(select(BridgeActorFollow)).all()), 2)
+                self.assertEqual(len(session.scalars(select(ChannelCommunitySubscription)).all()), 2)
+            self.assertEqual(follow_calls.count(subscriptions[101]), 1)
+            self.assertEqual(follow_calls.count(subscriptions[102]), 1)
+
     async def test_personal_feed_inbound_discussion_and_human_reply_do_not_enter_forum(self) -> None:
         """A user Note, remote reply and adopted discussion keep their own actor/parent."""
         from src.activitypub_handlers import dispatch_activitypub_event
@@ -345,6 +484,177 @@ class DiscordProductionD1Replay(unittest.IsolatedAsyncioTestCase):
             ).all()}, {400})
         self.assertEqual(self.runtime.fedify_gateway.render_personal_feed.await_count, 2)
         self.runtime.fedify_gateway.render_community.assert_not_awaited()
+
+    async def test_remote_personal_reply_worker_creates_and_records_discussion_before_echo(self) -> None:
+        """Inbound AP reply wakes the real worker, creates one discussion and ignores its echo."""
+        from src.activitypub_handlers import dispatch_activitypub_event
+        from src.activitypub_models import ActivityPubEvent, ActivityPubObject, ActivityPubTarget
+        from src.fedify_gateway_client import RenderPersonalFeedResult
+        from src.models import InboundDiscordDelivery, PersonalFeedThreadMapping
+        from src.platform_types import (
+            ChannelRef, ChannelView, CreatedMessage, MessageRef,
+            PlatformOperationError, ThreadRef,
+        )
+
+        channel = _ObservedText(self.guild)
+        self.channels[channel.id] = channel
+        self.assertEqual(
+            self.runtime.bot.event_router.personal_feed_service.bind_or_move('123', 10, 400).status,
+            'bound',
+        )
+        self.runtime.registration_service.create_or_get_user(
+            discord_user_id='124', requested_username='bob',
+        )
+
+        async def render(request: object) -> RenderPersonalFeedResult:
+            """Render the real publication's actor-scoped IDs at the gateway boundary."""
+            return RenderPersonalFeedResult(
+                request.activity_id, request.object_id, request.published_at,
+                {'id': request.activity_id, 'type': 'Create',
+                 'object': {'id': request.object_id, 'type': 'Note',
+                            'content': request.body_markdown}},
+            )
+
+        self.runtime.fedify_gateway.render_personal_feed = AsyncMock(side_effect=render)
+        root = SimpleNamespace(
+            id=401, channel=channel, guild=self.guild,
+            author=SimpleNamespace(id=123, bot=False, display_name='Alice'),
+            content='root with remote discussion', created_at=datetime(2026, 11, 18, tzinfo=UTC),
+            attachments=(), webhook_id=None, type='default', reference=None,
+        )
+        await self.runtime.bot.on_message(root)
+        root_ap_id = self._snapshot()[0][0][1]
+        worker = self.runtime.personal_feed_discord_delivery_worker
+        self.assertIsNotNone(worker)
+        # The adapter's four SDK I/O methods are the sole fake. The real
+        # scheduler, persistence, admission and incoming AP router are active.
+        physical: list[tuple[str, str, str | None]] = []
+        thread_creates: list[str] = []
+        observed_thread = _ObservedThread(thread_id=401, forum=channel, starter=None)
+
+        async def fetch_channel(ref: ChannelRef) -> ChannelView:
+            """Resolve the observed text root through the physical adapter port."""
+            self.assertEqual(ref.external_channel_id, '400')
+            return ChannelView(ChannelRef('discord-primary', '400', 'text', '10'), 'feed')
+
+        async def fetch_thread(ref: ThreadRef) -> object:
+            """A discussion is initially absent; no caller may invent its receipt."""
+            self.assertEqual(ref.external_thread_id, '401')
+            if not thread_creates:
+                raise PlatformOperationError('not_found', 'no discussion yet')
+            from src.platform_types import ThreadView
+            return ThreadView(ref, 'discussion', kind='message')
+
+        async def create_reply_thread(ref: MessageRef, *, title: str, attempt: object) -> ThreadRef:
+            """Persist one physical SDK Create tied to the root message identity."""
+            self.assertEqual(ref, MessageRef('discord-primary', '400', '401'))
+            self.assertTrue(title)
+            thread_creates.append(attempt.key)
+            self.channels[401] = observed_thread
+            return ThreadRef(ChannelRef('discord-primary', '400', 'text', '10'), '401')
+
+        async def send_message(
+            destination: ThreadRef, content: object, *, reply_to: object,
+            presentation: object, attempt: object,
+        ) -> CreatedMessage:
+            """Retain exact SDK side effects and a typed bot-owned acknowledgement."""
+            self.assertEqual(destination.external_thread_id, '401')
+            self.assertIsNone(reply_to)
+            physical.append((destination.external_thread_id, content.body, reply_to))
+            return CreatedMessage(MessageRef('discord-primary', '401', '403'), 'bot')
+
+        with (patch.object(worker.adapter, 'fetch_channel', side_effect=fetch_channel),
+              patch.object(worker.adapter, 'fetch_thread', side_effect=fetch_thread),
+              patch.object(worker.adapter, 'create_reply_thread', side_effect=create_reply_thread),
+              patch.object(worker.adapter, 'send_message', side_effect=send_message)):
+            worker.start()
+            try:
+                event = ActivityPubEvent(
+                    event_type='comment.created', delivery_id='remote-worker-delivery-1',
+                    occurred_at=datetime(2026, 11, 18, tzinfo=UTC),
+                    actor_id='https://remote.test/users/carol',
+                    target=ActivityPubTarget(kind='personal_feed', root_object_id=root_ap_id),
+                    object=ActivityPubObject(
+                        kind='comment', ap_id='https://remote.test/objects/worker-reply',
+                        parent_ap_id=root_ap_id, published_at=datetime(2026, 11, 18, tzinfo=UTC),
+                        author_name='Carol', attributed_to_actor_id='https://remote.test/users/carol',
+                        body_markdown='remote worker reply',
+                    ),
+                )
+                self.assertEqual((await dispatch_activitypub_event(event, self.runtime)).status,
+                                 'processed')
+
+                async def wait_for_receipt() -> None:
+                    """Wait on persisted worker state instead of assuming an SDK acknowledgement."""
+                    while True:
+                        with self.runtime.database.session() as session:
+                            row = session.scalar(select(InboundDiscordDelivery))
+                            if row is not None and row.state == 'delivered':
+                                return
+                        await asyncio.sleep(0.01)
+
+                await asyncio.wait_for(wait_for_receipt(), timeout=3)
+                self.assertEqual(thread_creates, ['personal-feed-root-thread:' + root_ap_id])
+                self.assertEqual(len(physical), 1)
+                with self.runtime.database.session() as session:
+                    rows = session.scalars(select(PersonalFeedThreadMapping)).all()
+                    receipts = session.scalars(select(InboundDiscordDelivery)).all()
+                    self.assertEqual(len(rows), 1)
+                    self.assertEqual(rows[0].external_thread_id, '401')
+                    self.assertEqual(len(receipts), 1)
+                    self.assertEqual(receipts[0].external_thread_id, '401')
+                    self.assertEqual(receipts[0].external_message_id, '403')
+                    self.assertEqual(receipts[0].state, 'delivered')
+                # Identity is connector+thread+message, never a naked Discord ID
+                # or a reference into another root's physical conversation.
+                parent_lookup = self.runtime.database.personal_feed_conversations
+                self.assertEqual(parent_lookup.get_remote_parent_for_discord_reply(
+                    root_object_id=root_ap_id, thread_id=401, message_id=403,
+                ), event.object.ap_id)
+                self.assertIsNone(parent_lookup.get_remote_parent_for_discord_reply(
+                    root_object_id=root_ap_id, thread_id=999, message_id=403,
+                ))
+                self.assertIsNone(parent_lookup.get_remote_parent_for_discord_reply(
+                    root_object_id='https://bridge.example/objects/foreign-root',
+                    thread_id=401, message_id=403,
+                ))
+                # An already-proven physical ID is still a legitimate parent
+                # while a later remote Update awaits Discord re-rendering.
+                await worker.stop()
+                updated = parent_lookup.admit_update(
+                    object_id=event.object.ap_id,
+                    activity_actor_id=event.actor_id,
+                    attributed_to_actor_id=event.actor_id,
+                    content_markdown='new content',
+                    updated_at=datetime(2026, 11, 18, 1, tzinfo=UTC),
+                    source_activity={'type': 'Update'},
+                )
+                self.assertEqual(updated.status, 'accepted')
+                with self.runtime.database.session() as session:
+                    self.assertEqual(session.scalar(select(InboundDiscordDelivery)).state,
+                                     'ready')
+                self.assertEqual(parent_lookup.get_remote_parent_for_discord_reply(
+                    root_object_id=root_ap_id, thread_id=401, message_id=403,
+                ), event.object.ap_id)
+                # The physical Gateway echo is not a new community publication.
+                before = self._snapshot()
+                await self.runtime.bot.on_thread_create(observed_thread)
+                self.assertEqual(self._snapshot(), before)
+                self.assertTrue(self.runtime.bot.event_router.is_personal_feed_thread(401))
+                human = _human_message(observed_thread, 404, reply_to=403)
+                human.author = SimpleNamespace(id=124, bot=False, display_name='Bob')
+                observed_thread.messages[404] = human
+                await self.runtime.bot.on_message(human)
+                await self.runtime.bot.on_message(human)
+                objects, _copies = self._snapshot()
+                self.assertEqual(len(objects), 2)
+                self.assertEqual(objects[1][2], event.object.ap_id)
+                self.assertEqual(objects[1][5], '404')
+                self.assertEqual(len(thread_creates), 1)
+                self.assertEqual(len(physical), 1)
+                self.runtime.fedify_gateway.render_community.assert_not_awaited()
+            finally:
+                await worker.stop()
 
     async def test_reply_duplicate_and_nested_reply_keep_immediate_parent(self) -> None:
         """The real Gateway callback publishes each reply once with its exact AP parent."""
