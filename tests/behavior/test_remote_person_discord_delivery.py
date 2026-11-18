@@ -144,8 +144,8 @@ class RemotePersonDiscordDeliveryScenarios(unittest.TestCase):
     def run_drain(self):
         asyncio.run(self.worker.drain_once())
 
-    def test_unrenderable_root_is_failed_without_any_webhook_post(self):
-        """Oversized mandatory identity is a local failure, not HTTP uncertainty."""
+    def test_unrenderable_root_is_retryable_without_any_webhook_post(self):
+        """Oversized identity is diagnosed and deferred without HTTP uncertainty."""
         event = self.event()
         oversized = 'https://remote.example/notes/' + 'x' * 2200
         event.object.ap_id = oversized
@@ -153,10 +153,22 @@ class RemotePersonDiscordDeliveryScenarios(unittest.TestCase):
         self.assertEqual(self.inbound.reserve(event).target_count, 2)
         self.run_drain()
         self.assertEqual(self.edge.creates, [])
-        self.assertEqual({row[1] for row in self.root_rows()}, {'failed'})
+        self.assertEqual({row[1] for row in self.root_rows()}, {'pending'})
+        with self.db.session() as session:
+            self.assertTrue(all(row.next_attempt_at is not None for row in
+                session.scalars(select(RemotePersonPostDelivery))))
         self.run_drain()
         self.assertEqual(self.edge.creates, [])
         self.assertTrue(all('mandatory feed author/identity' in row[-1] for row in self.root_rows()))
+        # The next due attempt remains a known-local retry, never a guessed
+        # uncertain webhook send or a terminal record after the attempt cap.
+        for _ in range(self.worker.MAX_ATTEMPTS + 1):
+            with self.db.immediate_session() as session:
+                for row in session.scalars(select(RemotePersonPostDelivery)):
+                    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            self.run_drain()
+            self.assertEqual(self.edge.creates, [])
+            self.assertEqual({row[1] for row in self.root_rows()}, {'pending'})
 
 
     def test_root_fanout_is_once_per_channel_and_thread(self):

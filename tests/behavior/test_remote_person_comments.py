@@ -670,8 +670,8 @@ class RemotePersonComments(unittest.TestCase):
         self.assertEqual({call.channel_id: call.parent_message_id for call in edge.calls[2:]},
                          {100: 1000001, 101: 1010002})
 
-    def test_unrenderable_comment_is_terminal_without_discord_post(self):
-        """Long signed Note identities cannot create permanent uncertain entries."""
+    def test_unrenderable_comment_is_retryable_without_discord_post(self):
+        """Long signed Note identities remain retryable but never uncertain."""
         oversized = 'https://other.example/notes/' + 'x' * 2200
         self.deliver_roots()
         self.assertEqual(self.comments.reserve(self.event(object_id=oversized)).status, 'reserved')
@@ -679,10 +679,20 @@ class RemotePersonComments(unittest.TestCase):
         asyncio.run(worker.drain_once())
         self.assertEqual(edge.calls, [])
         with self.db.session() as session:
-            self.assertEqual({row.state for row in session.scalars(
-                select(RemotePersonCommentPlacement))}, {'failed'})
+            placements = session.scalars(select(RemotePersonCommentPlacement)).all()
+            self.assertEqual({row.state for row in placements}, {'pending'})
+            self.assertTrue(all(row.next_attempt_at is not None for row in placements))
         asyncio.run(worker.drain_once())
         self.assertEqual(edge.calls, [])
+        for _ in range(worker.MAX_ATTEMPTS + 1):
+            with self.db.immediate_session() as session:
+                for row in session.scalars(select(RemotePersonCommentPlacement)):
+                    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            asyncio.run(worker.drain_once())
+            self.assertEqual(edge.calls, [])
+            with self.db.session() as session:
+                self.assertEqual({row.state for row in session.scalars(
+                    select(RemotePersonCommentPlacement))}, {'pending'})
 
 
     def test_signed_delete_before_create_blocks_late_discord_comment(self):

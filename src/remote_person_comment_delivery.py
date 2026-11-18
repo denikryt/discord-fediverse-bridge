@@ -314,16 +314,21 @@ class RemotePersonCommentDeliveryWorker:
             row.last_error = str(error)[:500]
 
     def _render_failure(self, claim: CommentDispatch, detail: str) -> None:
-        """Record an impossible-to-render identity as proven-unsent and terminal."""
+        """Defer a render failure as a proven-unsent, diagnosable retry."""
         with self.database.immediate_session() as session:
             row = session.get(RemotePersonCommentPlacement, claim.placement_id)
             if row is not None and row.state == 'claimed' and row.claim_token == claim.claim_token:
-                # The user-facing mandatory header has not crossed the Discord
-                # boundary, so no history reconciliation or blind retry applies.
-                row.state = 'failed'
+                # No POST was attempted. Keep the row retryable after a bounded
+                # backoff, not uncertain (which would require Discord history).
+                row.state = 'pending'
                 row.claim_token = None
                 row.last_applied_revision = None
-                row.next_attempt_at = None
+                # Local formatting never consumed a Discord send attempt.
+                # Undo the claim increment to preserve the v2 attempts CHECK
+                # and the transport retry budget after a future valid edit.
+                row.attempt_count = max(0, row.attempt_count - 1)
+                row.next_attempt_at = utcnow() + timedelta(
+                    seconds=20 * max(1, row.attempt_count))
                 row.last_error = detail[:500]
 
     async def _send(self, claim: CommentDispatch) -> None:

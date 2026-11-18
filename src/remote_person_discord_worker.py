@@ -214,16 +214,22 @@ class RemotePersonRootDeliveryWorker:
                 row.next_attempt_at = utcnow() + timedelta(seconds=10 * row.attempt_count)
 
     def _render_failure(self, claim: RootSnapshot, detail: str) -> None:
-        """Fail a deterministic unrenderable root without claiming an HTTP POST."""
+        """Defer an unrenderable root as a known-unsent, diagnosable retry."""
         with self.database.immediate_session() as session:
             row = session.get(RemotePersonPostDelivery, claim.delivery_id)
             if row is not None and row.state == 'claimed' and row.claim_token == claim.claim_token:
-                # No webhook request has happened; reconciliation would never
-                # find a message and must not quarantine this row as uncertain.
-                row.state = 'failed'
+                # The error is wholly local. A future corrected canonical
+                # object may become renderable, but no history reconciliation
+                # (or immediate hot loop) is appropriate before any POST.
+                row.state = 'pending'
                 row.claim_token = None
                 row.last_applied_revision = None
-                row.next_attempt_at = None
+                # The claim counted an *attempt*, but rendering failed before
+                # any transport attempt. Restore the available network budget
+                # and obey the v2 CHECK (attempt_count <= MAX_ATTEMPTS).
+                row.attempt_count = max(0, row.attempt_count - 1)
+                row.next_attempt_at = utcnow() + timedelta(
+                    seconds=10 * max(1, row.attempt_count))
                 row.last_error = detail[:500]
 
     def _ambiguous_failure(self, claim: RootSnapshot, detail: str) -> None:

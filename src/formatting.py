@@ -49,11 +49,93 @@ def format_fediverse_author_for_discord(author: str, actor_id: str = "") -> str:
 
 # The feed-only layout protects complete links while retaining the unchanged
 # Commons/NodeBB renderer and its historical truncate() behavior.
-_FEED_LINK = re.compile(
-    r"\[[^\]\n]+\]\((?:<https?://[^\s<>]+>|https?://[^\s)]+)\)"
-    r"|<https?://[^\s<>]+>"
-    r"|https?://[^\s<>]+"
-)
+_FEED_RAW_LINK = re.compile(r"<https?://[^\s<>]+>|https?://[^\s<>]+")
+
+
+def _feed_markdown_link_end(body: str, start: int) -> int | None:
+    """Find a complete masked link, including escaped labels and balanced URL parens.
+
+    This narrow parser recognizes the Markdown forms supported by feed layout;
+    it does not attempt to parse arbitrary Markdown or change Community output.
+    """
+    if body[start] != '[':
+        return None
+    position = start + 1
+    nesting = 1
+    while position < len(body):
+        char = body[position]
+        if char == '\\':
+            # An escaped closing bracket is part of the label, not its end.
+            position += 2
+            continue
+        if char == '\n':
+            return None
+        if char == '[':
+            nesting += 1
+        elif char == ']':
+            nesting -= 1
+            if nesting == 0:
+                break
+        position += 1
+    if nesting != 0 or position == start + 1 or body[position + 1:position + 2] != '(':
+        return None
+    destination = position + 2
+    if body.startswith('<http://', destination) or body.startswith('<https://', destination):
+        close = body.find('>', destination + 1)
+        if close < 0 or any(char.isspace() for char in body[destination:close]):
+            return None
+        return close + 2 if body[close + 1:close + 2] == ')' else None
+    if not (body.startswith('http://', destination) or body.startswith('https://', destination)):
+        return None
+    # A raw destination may have nested parentheses: the first ')' is not
+    # necessarily the Markdown closer. Backslash escapes do not change depth.
+    depth = 1
+    cursor = destination
+    while cursor < len(body):
+        char = body[cursor]
+        if char == '\\':
+            cursor += 2
+            continue
+        if char.isspace() or char == '<' or char == '>':
+            return None
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            if depth == 0:
+                return cursor + 1
+        cursor += 1
+    return None
+
+
+def _feed_protected_spans(body: str) -> list[tuple[int, int]]:
+    """Return protected URL/link boundaries for safe feed-body truncation."""
+    # Raw URLs and angle autolinks need no Markdown parsing. The second pass
+    # expands masked links to include their entire (possibly escaped) label.
+    spans = [match.span() for match in _FEED_RAW_LINK.finditer(body)]
+    # Closing brackets identify candidate links. Scan labels once with a stack,
+    # rather than rescanning the entire tail for every unclosed '[' in a
+    # potentially attacker-controlled Note body.
+    stack: list[int] = []
+    cursor = 0
+    while cursor < len(body):
+        char = body[cursor]
+        if char == '\\':
+            cursor += 2
+            continue
+        if char == '[':
+            stack.append(cursor)
+        elif char == ']' and stack and body[cursor + 1:cursor + 2] == '(':
+            opening = stack.pop()
+            end = _feed_markdown_link_end(body, opening)
+            if end is not None:
+                spans.append((opening, end))
+                cursor = end
+                continue
+        elif char == ']' and stack:
+            stack.pop()
+        cursor += 1
+    return sorted(spans)
 
 
 def validate_feed_object_url(object_id: str) -> str:
@@ -122,9 +204,10 @@ def render_feed_discord_message(*, header: str, body: str,
     if budget <= 0:
         return mandatory
     cut = _prefix_for_budget(clean_body, max(0, budget - 1))
-    for link in _FEED_LINK.finditer(clean_body):
-        if link.start() < cut < link.end():
-            cut = link.start()
+    protected = _feed_protected_spans(clean_body)
+    for start, end in protected:
+        if start < cut < end:
+            cut = start
             break
     # Prefer a nearby word boundary, but never force a complete long word to
     # disappear when a safe character-prefix suffices.
@@ -133,9 +216,9 @@ def render_feed_discord_message(*, header: str, body: str,
         cut = whitespace
     # A word-boundary adjustment can move back *into* a Markdown label.
     # Revalidate the final cut against the same complete protected atoms.
-    for link in _FEED_LINK.finditer(clean_body):
-        if link.start() < cut < link.end():
-            cut = link.start()
+    for start, end in protected:
+        if start < cut < end:
+            cut = start
             break
     prefix = clean_body[:cut].rstrip()
     short_body = (prefix + '…') if prefix else '…'

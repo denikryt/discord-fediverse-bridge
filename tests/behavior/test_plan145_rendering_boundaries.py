@@ -11,6 +11,7 @@ import unittest
 from types import SimpleNamespace
 
 from src.remote_person_webhooks import remote_root_content, RemotePersonWebhookTransport
+from src.formatting import feed_comment_content
 
 ACTOR = 'https://remote.example/users/bob'
 NOTE = 'https://remote.example/notes/42'
@@ -94,6 +95,32 @@ class FeedRootRenderingContracts(unittest.TestCase):
                 self.assertLessEqual(len(rendered.encode('utf-16-le')) // 2, 2000)
                 self.assertTrue(link in rendered or '[read' not in rendered)
 
+
+    def test_nested_url_parentheses_and_escaped_label_bracket_remain_atomic(self) -> None:
+        """A cutoff inside a balanced URL or escaped label cannot emit partial Markdown."""
+        links = ('[read this multi word label](https://ref.example/a(b)c)',
+                 r'[see \] this label](https://ref.example/a)')
+        for link in links:
+            for n in range(1850, 1980):
+                with self.subTest(link=link, prefix=n):
+                    rendered = remote_root_content(post(body='x' * n + ' ' + link + ' ' + 'y' * 300))
+                    self.assertLessEqual(len(rendered.encode('utf-16-le')) // 2, 2000)
+                    self.assertTrue(link in rendered or link.split('](', 1)[0][:4] not in rendered)
+
+    def test_comment_renderer_preserves_balanced_and_escaped_markdown_links(self) -> None:
+        """Bot copy headers and masked identities reserve complete body links."""
+        links = ('[read this multi word label](https://ref.example/a(b)c)',
+                 r'[see \] this label](https://ref.example/a)')
+        for link in links:
+            for prefix in range(1840, 1950):
+                with self.subTest(link=link, prefix=prefix):
+                    content = feed_comment_content(
+                        actor_name='bob', actor_id=ACTOR, object_id=NOTE,
+                        body='x' * prefix + ' ' + link + ' ' + 'y' * 300,
+                    )
+                    self.assertLessEqual(len(content.encode('utf-16-le')) // 2, 2000)
+                    self.assertTrue(content.startswith(f'`bob@remote.example` [↗](<{NOTE}>)'))
+                    self.assertTrue(link in content or link.split('](', 1)[0][:4] not in content)
 
     def test_exact_root_history_match_requires_right_webhook_channel_and_footer(self) -> None:
         """Quoting an ID, a prefix URL or a foreign webhook proves nothing."""
