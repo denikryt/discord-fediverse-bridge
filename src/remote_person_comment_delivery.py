@@ -17,6 +17,7 @@ from .models import (InboundConversationObject, MessageMapping, PublishedActivit
                      RemotePersonCommentPlacement, RemotePersonPost,
                      RemotePersonPostDelivery, utcnow)
 from .remote_person_feeds import RemotePersonChannelService
+from .formatting import feed_comment_content, has_feed_comment_identity
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,8 @@ class BotCommentTransport:
                 fail_if_not_exists=True,
             )
         message = await thread.send(
-            f'**{claim.actor_name}:** {claim.body}\n<{claim.object_id}>', **options,
+            feed_comment_content(actor_name=claim.actor_name, actor_id=claim.actor_id,
+                                 object_id=claim.object_id, body=claim.body), **options,
         )
         return int(message.id)
 
@@ -97,11 +99,22 @@ class BotCommentTransport:
         perms = thread.permissions_for(thread.guild.me)
         if not (perms.view_channel and perms.read_message_history):
             raise PermissionError('cannot reconcile without message history')
+        # An observed message must belong to the claimed Discord thread and
+        # guild; a history adapter pointing elsewhere is not evidence.
+        if (getattr(thread, 'id', None) != claim.thread_id
+                or getattr(getattr(thread, 'guild', None), 'id', None) != claim.guild_id):
+            raise PermissionError('history belongs to an unexpected Discord thread')
+        matched: int | None = None
         async for message in thread.history(limit=100):
-            if getattr(message.author, 'id', None) == getattr(self.bot.user, 'id', None) \
-                    and f'<{claim.object_id}>' in message.content:
-                return int(message.id)
-        return None
+            if (getattr(getattr(message, 'author', None), 'id', None)
+                    == getattr(getattr(self.bot, 'user', None), 'id', None)
+                    and has_feed_comment_identity(getattr(message, 'content', ''), claim.object_id)):
+                # Multiple identical markers do not identify which Discord
+                # message belongs to the single durable placement.
+                if matched is not None:
+                    return None
+                matched = int(message.id)
+        return matched
 
 
 class RemotePersonCommentDeliveryWorker:
@@ -339,8 +352,14 @@ class RemotePersonCommentDeliveryWorker:
                     continue
                 name = getattr(canonical, 'actor_name', None) or getattr(canonical, 'actor_username', None) or 'Remote user'
                 content = getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''
+                # Edit the saved canonical author's message, not an arbitrary
+                # current Discord display name or the root Person's identity.
+                actor_id = (canonical.actor_id if isinstance(canonical, InboundConversationObject)
+                            else canonical.actor_url)
+                rendered = feed_comment_content(actor_name=name, actor_id=actor_id,
+                                                object_id=canonical.object_id, body=content)
                 pending.append((row.id, row.destination_thread_id, row.discord_message_id,
-                                desired, f'**{name}:** {content}\n<{canonical.object_id}>'))
+                                desired, rendered))
         for placement_id, thread_id, message_id, revision, content in pending[:40]:
             try:
                 if revision == 'deleted':

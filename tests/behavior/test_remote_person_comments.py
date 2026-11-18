@@ -565,6 +565,11 @@ class RemotePersonComments(unittest.TestCase):
         asyncio.run(worker.drain_once())
         self.assertEqual(len(edge.edits), 2)
         self.assertTrue(all('Edited' in content for _, _, content in edge.edits))
+        # The edited bot copies keep the exact canonical comment identity and
+        # the comment author's host, not their root publisher's host.
+        self.assertTrue(all(content.startswith('`Alice@other.example` [↗](<' + COMMENT + '>)')
+                            for _, _, content in edge.edits))
+        self.assertTrue(all(content.count('[↗](<') == 1 for _, _, content in edge.edits))
         self.assertEqual(self.comments.reserve(self.event(operation='deleted')).status, 'deleted')
         asyncio.run(worker.drain_once())
         self.assertEqual(len(edge.deletes), 2)

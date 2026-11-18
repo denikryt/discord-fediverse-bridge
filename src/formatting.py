@@ -139,6 +139,31 @@ def render_feed_discord_message(*, header: str, body: str,
     return result
 
 
+
+def feed_comment_content(*, actor_name: str, actor_id: str,
+                         object_id: str, body: str) -> str:
+    """Render one bot-owned federated comment with an exact header marker.
+
+    The marker is the only proof that a history entry belongs to this AP Note.
+    It must remain in the first paragraph during Create, Update and mirroring.
+    """
+    identity = validate_feed_object_url(object_id)
+    header = f'{feed_author_header(actor_name, actor_id)} [↗](<{identity}>)'
+    return render_feed_discord_message(header=header, body=body)
+
+
+def has_feed_comment_identity(content: str, object_id: str) -> bool:
+    """Match the exact, bridge-authored first-paragraph identity marker only.
+
+    A copied URL in the comment body, a nested quoted URL, or an AP ID that is
+    merely a prefix of another AP ID is not evidence of a successful POST.
+    """
+    marker = f' [↗](<{validate_feed_object_url(object_id)}>)'
+    first = str(content or '').split('\n\n', 1)[0]
+    return bool(first.startswith('`') and first.count('`') == 2
+                and first.endswith(marker) and first.index('`', 1) == len(first) - len(marker) - 1)
+
+
 def format_lemmy_post_for_discord(
     author: str,
     title: str,

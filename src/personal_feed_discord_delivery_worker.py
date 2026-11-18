@@ -9,6 +9,7 @@ import discord
 
 from .runtime_ports import DiscordChannelLookupPort
 from .conversation_parent_resolver import ConversationParentResolver
+from .formatting import feed_comment_content
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +102,12 @@ class PersonalFeedDiscordDeliveryWorker:
                     await message.delete()
                     result_message_id = claim.discord_message_id
                 else:
-                    prefix = f"**{claim.actor_name or 'Remote user'}:** "
+                    content = feed_comment_content(
+                        actor_name=claim.actor_name or 'Remote user', actor_id=claim.actor_id,
+                        object_id=claim.object_id, body=claim.content_markdown,
+                    )
                     await message.edit(
-                        content=prefix + claim.content_markdown,
+                        content=content,
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                     result_message_id = claim.discord_message_id
@@ -162,14 +166,19 @@ class PersonalFeedDiscordDeliveryWorker:
                     )
                 else:
                     reference = None
-                prefix = f"**{claim.actor_name or 'Remote user'}:** "
+                # The canonical Note's own Actor supplies attribution, not
+                # the Personal Feed owner of the root thread.
+                content = feed_comment_content(
+                    actor_name=claim.actor_name or 'Remote user', actor_id=claim.actor_id,
+                    object_id=claim.object_id, body=claim.content_markdown,
+                )
                 send_options = {
                     "allowed_mentions": discord.AllowedMentions.none(),
                     "suppress_embeds": True,
                 }
                 if reference is not None:
                     send_options["reference"] = reference
-                message = await thread.send(prefix + claim.content_markdown, **send_options)
+                message = await thread.send(content, **send_options)
                 result_message_id = int(message.id)
         except asyncio.CancelledError:
             # Cancellation is lifecycle control, not a Discord failure.  Do not
