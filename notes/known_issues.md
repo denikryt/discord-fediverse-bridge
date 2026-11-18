@@ -1,3 +1,17 @@
+## Discord D1 fixture ActivityPub URLs F1 — fixed locally (2026-11-18)
+
+- The independent full-suite replay on `d22f884` passed 2270 Python tests but
+  failed the retired local ActivityPub URL scanner on four newly introduced
+  root-level Create activity IDs in D1 callback fixtures.
+- The four IDs now use `build_user_create_post_activity_id()` with their actual
+  `alice`/`bob` owners. The legacy Personal Feed test retains its deliberately
+  missing physical source container; scanner exclusions were not changed.
+- Local retired-URL and identity URL suites: 50 passed. Full D1 SDK callback
+  tests, the full frozen Python suite and S19 were not re-run here because the
+  available environment lacks `discord.py`, `hypothesis` and frozen package
+  downloads. The report's P0–P2 production-runtime behavioral suite remains
+  a separate outstanding test-coverage task, not part of this fixture fix.
+
 ## Discord published-source replay D1 — fixed locally (2026-11-18)
 
 - The real Discord `on_thread_create` replay and subsequent human `on_message`

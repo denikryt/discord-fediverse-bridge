@@ -3,6 +3,7 @@
 These scenarios use a real migrated SQLite database and the production
 BridgeBot callback entry points. Only the Discord SDK observation/ingress edge
 is simulated; lookup ownership remains in the production repository.
+Fixture Create IDs use the current actor-scoped ActivityPub URL contract.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from src.activitypub_identity_urls import build_user_create_post_activity_id
 from src.db import Database
 from src.discord_bot import BridgeBot
 from src.models import PublishedActivityObject
@@ -94,7 +96,9 @@ class DiscordExactSourceGatewayScenarios(unittest.IsolatedAsyncioTestCase):
                 actor_url='https://bridge.test/actors/users/alice',
                 publication_context='community',
                 community_actor_url='https://bridge.test/actors/communities/demo',
-                activity_id='https://bridge.test/activities/root',
+                activity_id=build_user_create_post_activity_id(
+                    origin='https://bridge.test', username='alice', activity_id='root',
+                ),
                 object_id='https://bridge.test/objects/root',
                 kind='post',
                 body_markdown='first forum post',
@@ -111,7 +115,9 @@ class DiscordExactSourceGatewayScenarios(unittest.IsolatedAsyncioTestCase):
                 actor_url='https://bridge.test/actors/users/bob',
                 publication_context='personal_feed',
                 conversation_root_object_id='https://bridge.test/objects/unrelated-feed',
-                activity_id='https://bridge.test/activities/unrelated-feed',
+                activity_id=build_user_create_post_activity_id(
+                    origin='https://bridge.test', username='bob', activity_id='unrelated-feed',
+                ),
                 object_id='https://bridge.test/objects/unrelated-feed',
                 kind='post', body_markdown='unrelated note',
                 discord_guild_id=1, discord_channel_id=950,
@@ -136,7 +142,9 @@ class DiscordExactSourceGatewayScenarios(unittest.IsolatedAsyncioTestCase):
                 actor_url='https://bridge.test/actors/users/bob',
                 publication_context='personal_feed',
                 conversation_root_object_id='https://bridge.test/objects/feed',
-                activity_id='https://bridge.test/activities/feed',
+                activity_id=build_user_create_post_activity_id(
+                    origin='https://bridge.test', username='bob', activity_id='feed',
+                ),
                 object_id='https://bridge.test/objects/feed',
                 kind='post',
                 body_markdown='feed root',
@@ -189,7 +197,9 @@ class DiscordExactSourceGatewayScenarios(unittest.IsolatedAsyncioTestCase):
                 actor_url='https://bridge.test/actors/users/bob',
                 publication_context='personal_feed',
                 conversation_root_object_id='https://bridge.test/objects/old-feed',
-                activity_id='https://bridge.test/activities/old-feed',
+                activity_id=build_user_create_post_activity_id(
+                    origin='https://bridge.test', username='bob', activity_id='old-feed',
+                ),
                 object_id='https://bridge.test/objects/old-feed',
                 kind='post', body_markdown='historical root',
                 discord_guild_id=1, discord_channel_id=950,
