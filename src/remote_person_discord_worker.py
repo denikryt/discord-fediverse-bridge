@@ -299,9 +299,13 @@ class RemotePersonRootDeliveryWorker:
     def _retained(self, *, kind: str, limit: int = 20) -> list[RootSnapshot]:
         """Select delivered roots for thread repair or authoritative mutations."""
         with self.database.session() as session:
+            # Errors in a retained Edit/Delete must not monopolize the first
+            # 20 slots. Threads keep their existing id-ordered repair scan.
+            ordering = ((RemotePersonPostDelivery.updated_at, RemotePersonPostDelivery.id)
+                        if kind == 'mutation' else (RemotePersonPostDelivery.id,))
             rows = session.scalars(select(RemotePersonPostDelivery).where(
                 RemotePersonPostDelivery.state == 'delivered',
-            ).order_by(RemotePersonPostDelivery.id)).all()
+            ).order_by(*ordering)).all()
             selected = []
             now = utcnow()
             for row in rows:
@@ -367,6 +371,7 @@ class RemotePersonRootDeliveryWorker:
             row = session.get(RemotePersonPostDelivery, root.delivery_id)
             if row is not None and row.state == 'delivered':
                 row.last_error = ('original webhook mutation failed: ' + str(exc))[:500]
+                row.updated_at = utcnow()  # Leave other due webhook copies a turn.
 
     async def _mutate(self, root: RootSnapshot) -> None:
         """Edit/delete retained roots even when the last Follow was removed."""

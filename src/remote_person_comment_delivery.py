@@ -318,7 +318,11 @@ class RemotePersonCommentDeliveryWorker:
             for row in session.scalars(select(RemotePersonCommentPlacement).where(
                 RemotePersonCommentPlacement.state == 'delivered',
                 RemotePersonCommentPlacement.discord_message_id.is_not(None),
-            ).order_by(RemotePersonCommentPlacement.id)):
+            # Failed edits remain eligible but move behind unattempted copies.
+            # Persisted updated_at makes this bounded 40-job rotation survive
+            # a worker restart without an additional mutation queue.
+            ).order_by(RemotePersonCommentPlacement.updated_at,
+                       RemotePersonCommentPlacement.id)):
                 copy = session.get(RemotePersonPostDelivery, row.root_delivery_id)
                 canonical = session.get(InboundConversationObject, row.inbound_object_id) \
                     if row.inbound_object_id is not None else session.get(PublishedActivityObject, row.published_object_id)
@@ -357,6 +361,7 @@ class RemotePersonCommentDeliveryWorker:
                                 row.last_error = 'original Discord comment was removed'
                         else:
                             row.last_error = ('comment mutation failed: ' + str(exc))[:500]
+                            row.updated_at = utcnow()  # Do not retry this copy first on every pass.
                 continue
             with self.database.immediate_session() as session:
                 row = session.get(RemotePersonCommentPlacement, placement_id)

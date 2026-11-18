@@ -234,6 +234,46 @@ class RemotePersonDiscordDeliveryScenarios(unittest.TestCase):
                 RemotePersonPostDelivery.discord_channel_id == 120))
             self.assertEqual((last.state, last.discord_root_message_id), ('delivered', 100120))
 
+    def test_forty_failing_root_mutations_do_not_starve_healthy_root(self):
+        """The 41st delivered webhook root eventually receives its Discord Edit."""
+        self.inbound.reserve(self.event())
+        with self.db.immediate_session() as session:
+            post = session.scalar(select(RemotePersonPost))
+            rows = list(session.scalars(select(RemotePersonPostDelivery)))
+            for channel_id in range(102, 141):
+                rows.append(RemotePersonPostDelivery(
+                    post_id=post.id, discord_guild_id=1, discord_channel_id=channel_id,
+                    state='delivered', webhook_id=1000 + channel_id,
+                    discord_root_message_id=100000 + channel_id,
+                    discord_thread_id=100000 + channel_id,
+                    last_applied_revision='stale',
+                ))
+            session.add_all(rows[2:])
+            for row in rows[:2]:
+                row.state = 'delivered'
+                row.webhook_id = 1000 + row.discord_channel_id
+                row.discord_root_message_id = 100000 + row.discord_channel_id
+                row.discord_thread_id = row.discord_root_message_id
+                row.last_applied_revision = 'stale'
+        edits = []
+        async def edit(prepared, message_id, root):
+            """Earlier root copies fail consistently; final channel is healthy."""
+            edits.append(root.channel_id)
+            if root.channel_id < 140:
+                raise TimeoutError('webhook edit fails independently')
+        self.edge.edit = edit
+        for _ in range(3):
+            self.run_drain()
+        self.assertIn(140, edits)
+        with self.db.session() as session:
+            newest = session.scalar(select(RemotePersonPostDelivery).where(
+                RemotePersonPostDelivery.discord_channel_id == 140))
+            self.assertEqual(newest.last_applied_revision, post.revision_fingerprint)
+            first = session.scalar(select(RemotePersonPostDelivery).where(
+                RemotePersonPostDelivery.discord_channel_id == 100))
+            self.assertEqual(first.last_applied_revision, 'stale')
+        self.assertEqual(self.edge.creates, [])
+
     def test_empty_media_only_note_starts_thread_with_fallback_title(self):
         """A Note without text must not index an absent first line."""
         class Message:

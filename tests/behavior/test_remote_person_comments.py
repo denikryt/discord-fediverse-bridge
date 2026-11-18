@@ -767,6 +767,37 @@ class RemotePersonComments(unittest.TestCase):
             self.assertTrue(all(row.state == 'pending_parent' and row.discord_message_id is None
                                 for row in children))
 
+    def test_forty_failing_comment_edits_do_not_starve_healthy_copy(self):
+        """An unrelated failed Discord Edit cannot consume the same batch forever."""
+        self.deliver_roots()
+        for index in range(21):
+            self.comments.reserve(self.event(object_id=f'https://other.example/notes/edit-{index}'))
+        with self.db.immediate_session() as session:
+            for row in session.scalars(select(RemotePersonCommentPlacement)):
+                copy = session.get(RemotePersonPostDelivery, row.root_delivery_id)
+                row.state = 'delivered'
+                row.destination_thread_id = copy.discord_thread_id
+                row.discord_message_id = 2000000 + row.id
+                row.last_applied_revision = 'stale'
+        worker, edge = self.worker()
+        calls = []
+        async def edit(thread_id, message_id, content):
+            """Forty older edits fail; the two youngest copies can be updated."""
+            calls.append(message_id)
+            if message_id <= 2000040:
+                raise TimeoutError('independent Discord edit failure')
+            edge.edits.append((thread_id, message_id, content))
+        edge.edit = edit
+        for _ in range(3):
+            asyncio.run(worker._mutate_retained())
+        self.assertEqual({message_id for _, message_id, _ in edge.edits}, {2000041, 2000042})
+        with self.db.session() as session:
+            rows = list(session.scalars(select(RemotePersonCommentPlacement).order_by(
+                RemotePersonCommentPlacement.id)))
+            self.assertEqual({row.last_applied_revision for row in rows[:40]}, {'stale'})
+            self.assertNotEqual(rows[-1].last_applied_revision, 'stale')
+        self.assertEqual(edge.calls, [])  # Mutation only; no extra Create.
+
     def test_removed_bot_copy_delete_is_confirmed_once(self):
         """Deleting a Discord bot copy already absent is an idempotent mutation."""
         self.deliver_roots()
