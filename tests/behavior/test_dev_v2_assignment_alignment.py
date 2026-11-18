@@ -1,7 +1,9 @@
-"""Offline v2 assignment rebuild on a disposable SQLite snapshot."""
+"""Offline v2 assignment index alignment on a disposable SQLite snapshot."""
 from __future__ import annotations
 
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,7 +25,8 @@ class DevV2AssignmentAlignment(unittest.TestCase):
         snapshot = Path('src/db/schema_versions/v2.sql').read_text()
         self.latest = snapshot
         self.old = snapshot.replace(
-            '\tCONSTRAINT uq_remote_person_assignment_follow_guild UNIQUE (follow_id, discord_guild_id),\n', '')
+            'CREATE UNIQUE INDEX uq_remote_person_assignment_follow_guild ON '
+            'remote_person_channel_assignments (follow_id, discord_guild_id);\n', '')
         self.assertNotEqual(snapshot, self.old)
         with sqlite3.connect(self.source) as conn:
             conn.executescript(self.old)
@@ -44,8 +47,8 @@ class DevV2AssignmentAlignment(unittest.TestCase):
                 (id,follow_id,discord_guild_id,discord_channel_id,created_at)
                 VALUES(1,1,10,200,?)''', (now,))
 
-    def test_rebuild_produces_exact_v2_and_preserves_all_rows(self):
-        """An explicit copy converts table constraint without introducing v3."""
+    def test_index_alignment_produces_exact_v2_and_preserves_all_rows(self):
+        """An explicit copy adds one index without a v3 or table rebuild."""
         self.assertTrue(align(self.source, self.output))
         with sqlite3.connect(self.source) as old, sqlite3.connect(self.output) as new:
             self.assertEqual(old.execute('SELECT * FROM remote_person_channel_assignments').fetchall(),
@@ -60,8 +63,8 @@ class DevV2AssignmentAlignment(unittest.TestCase):
                                  schema_entries_fingerprint(_entries(expected)))
         self.assertFalse(align(self.output, self.root / 'copied.db'))
 
-    def test_manually_added_index_is_replaced_by_exact_v2_constraint(self):
-        """A manually added guard must not pass off an old table as updated v2."""
+    def test_manually_added_index_is_replaced_by_named_v2_index(self):
+        """An equivalent manual guard is replaced with the frozen named index."""
         with sqlite3.connect(self.source) as conn:
             conn.execute('CREATE UNIQUE INDEX manual_follow_guild '
                          'ON remote_person_channel_assignments (follow_id, discord_guild_id)')
@@ -74,6 +77,65 @@ class DevV2AssignmentAlignment(unittest.TestCase):
             self.assertNotIn('manual_follow_guild', indexes)
             self.assertEqual(schema_entries_fingerprint(_entries(aligned)),
                              schema_entries_fingerprint(_entries(expected)))
+
+    def test_named_index_alone_is_accepted_by_the_v2_schema_guard(self):
+        """The documented one-index offline operation matches the exact snapshot."""
+        with sqlite3.connect(self.source) as conn:
+            conn.execute('CREATE UNIQUE INDEX uq_remote_person_assignment_follow_guild '
+                         'ON remote_person_channel_assignments (follow_id, discord_guild_id)')
+        self.assertFalse(align(self.source, self.output))
+        with sqlite3.connect(self.output) as aligned, sqlite3.connect(':memory:') as expected:
+            expected.executescript(self.latest)
+            self.assertEqual(schema_entries_fingerprint(_entries(aligned)),
+                             schema_entries_fingerprint(_entries(expected)))
+
+    def test_reserved_uri_characters_in_source_path(self):
+        """Literal '?' and '#' in a valid filename cannot become URI query data."""
+        unusual = self.root / 'prior-v2-with-spaces ?#.db'
+        self.source.rename(unusual)
+        content = unusual.read_bytes()
+        # Exercise the shipped CLI, not only its helper: argv and SQLite URI
+        # parsing must preserve reserved characters in the actual filename.
+        result = subprocess.run(
+            [sys.executable, '-m', 'scripts.align_dev_v2_assignments',
+             '--source', str(unusual), '--output', str(self.output), '--offline-confirmed'],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Aligned prior v2', result.stdout)
+        self.assertEqual(unusual.read_bytes(), content)
+        with sqlite3.connect(self.output) as aligned, sqlite3.connect(':memory:') as expected:
+            expected.executescript(self.latest)
+            self.assertEqual(schema_entries_fingerprint(_entries(aligned)),
+                             schema_entries_fingerprint(_entries(expected)))
+
+    def test_cp32_table_constraint_can_be_aligned_explicitly(self):
+        """Recognized prior physical v2 table UNIQUE is rebuilt only offline."""
+        cp32 = self.root / 'cp32.db'
+        former = self.latest.replace(
+            '\tUNIQUE (follow_id, discord_channel_id),\n',
+            '\tUNIQUE (follow_id, discord_channel_id),\n'
+            '\tCONSTRAINT uq_remote_person_assignment_follow_guild UNIQUE (follow_id, discord_guild_id),\n',
+        ).replace('CREATE UNIQUE INDEX uq_remote_person_assignment_follow_guild ON '
+                  'remote_person_channel_assignments (follow_id, discord_guild_id);\n', '')
+        with sqlite3.connect(cp32) as conn:
+            conn.executescript(former)
+            conn.execute('PRAGMA user_version=2')
+        self.assertTrue(align(cp32, self.output))
+        with sqlite3.connect(self.output) as aligned, sqlite3.connect(':memory:') as expected:
+            expected.executescript(self.latest)
+            self.assertEqual(schema_entries_fingerprint(_entries(aligned)),
+                             schema_entries_fingerprint(_entries(expected)))
+
+    def test_partial_manual_index_is_not_an_equivalent_guard(self):
+        """A partial index is not a substitute for guild-wide uniqueness."""
+        with sqlite3.connect(self.source) as conn:
+            conn.execute('CREATE UNIQUE INDEX manual_partial ON '
+                         'remote_person_channel_assignments (follow_id, discord_guild_id) '
+                         'WHERE follow_id=1')
+        with self.assertRaisesRegex(ValueError, 'unrecognized extra assignment index'):
+            align(self.source, self.output)
+        self.assertFalse(self.output.exists())
 
     def test_conflicts_abort_without_creating_output(self):
         """Two channels of the same Follow/guild require manual owner choice."""

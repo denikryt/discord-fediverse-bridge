@@ -278,14 +278,18 @@ HAVING COUNT(*) > 1;
 
 If rows are returned, resolve their destination ownership with the owner;
 never delete a user's assignment automatically. The owner must then authorize
-either an offline SQLite table rebuild to the *exact* new v2 DDL (including
-both unique constraints and existing FKs/indexes) or a complete **development**
-DB reset. A standalone `CREATE UNIQUE INDEX` is **not** an equivalent physical
-schema snapshot and may fail strict fingerprint validation. Do not perform a
-reset or alignment as an application startup side effect.
+either the one named unique index on `(follow_id, discord_guild_id)`
+or a complete **development** DB reset. The exact DDL is:
+
+```sql
+CREATE UNIQUE INDEX uq_remote_person_assignment_follow_guild ON remote_person_channel_assignments (follow_id, discord_guild_id);
+```
+
+The strict schema guard requires the exact name and SQL shape. Do not perform
+alignment or a reset as an application startup side effect.
 
 On a stopped **development** copy with its complete backup verified, the
-explicit offline tool can rebuild the assignment table to the fixed v2 DDL:
+explicit offline tool can create a verified output copy with the fixed v2 DDL:
 
 ```bash
 python -m scripts.align_dev_v2_assignments \
@@ -295,8 +299,10 @@ python -m scripts.align_dev_v2_assignments \
 ```
 
 The command refuses conflicting Follow/guild rows and unrelated schema
-changes. It writes only a new file, preserving all existing rows and the
-unchanged source. It checks `PRAGMA user_version=2`, foreign keys, SQLite
+changes. For an original CP21 physical v2 database it adds only the named
+index; the recognized CP32 table-constraint variant is rebuilt explicitly
+to the same named-index layout. It writes only a new file, preserving all
+existing rows and the unchanged source. It checks `PRAGMA user_version=2`, foreign keys, SQLite
 integrity and the complete v2 physical schema fingerprint before returning.
 Replace the development database only after inspecting the output and with
 all writers stopped; keep the original database and media backup for rollback.

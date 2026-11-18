@@ -16,7 +16,9 @@ from src.db.backup import schema_entries_fingerprint
 
 TABLE = 'remote_person_channel_assignments'
 INDEX = 'ix_remote_person_assignments_target'
-NEW_CONSTRAINT = '\tCONSTRAINT uq_remote_person_assignment_follow_guild UNIQUE (follow_id, discord_guild_id),\n'
+NEW_INDEX = 'uq_remote_person_assignment_follow_guild'
+# Exact CP32 development v2 table shape, accepted only by the offline tool.
+PREVIOUS_CONSTRAINT = '\tCONSTRAINT uq_remote_person_assignment_follow_guild UNIQUE (follow_id, discord_guild_id),\n'
 COLUMNS = ('id', 'follow_id', 'discord_guild_id', 'discord_channel_id', 'created_at')
 
 
@@ -51,18 +53,26 @@ def _guard_source(db: sqlite3.Connection, reference: sqlite3.Connection, ddl: di
     if schema_entries_fingerprint(unaffected(entries)) != schema_entries_fingerprint(unaffected(expected)):
         raise ValueError('source differs from v2 outside the assignment table')
     actual_table = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (TABLE,)).fetchone()
-    old_ddl = ddl[TABLE].replace(NEW_CONSTRAINT, '')
-    if actual_table is None or actual_table[0] != old_ddl:
-        raise ValueError('assignment table is not the recognized prior v2 shape')
+    previous_ddl = ddl[TABLE].replace(
+        '\tUNIQUE (follow_id, discord_channel_id),\n',
+        '\tUNIQUE (follow_id, discord_channel_id),\n' + PREVIOUS_CONSTRAINT,
+    )
+    if actual_table is None or actual_table[0] not in (ddl[TABLE], previous_ddl):
+        raise ValueError('assignment table is not a recognized development v2 shape')
     # A manually added unique index is redundant; allow only the exact known
     # (follow_id, guild_id) columns, not arbitrary extra index semantics.
     for kind, name, table, sql in entries:
         if table != TABLE or kind != 'index' or name == INDEX:
             continue
-        columns = [r[2] for r in db.execute(f'PRAGMA index_info("{name}")')]
-        definition = (sql or '').upper()
-        if (columns != ['follow_id', 'discord_guild_id']
-                or not definition.startswith('CREATE UNIQUE INDEX')):
+        # Only an exact, full unique index is redundant. A partial guard,
+        # altered collation or expression may be unrelated source tampering.
+        expected_manual = (f'CREATE UNIQUE INDEX {name} ON {TABLE} '
+                           '(follow_id, discord_guild_id)')
+        if sql != expected_manual:
+            raise ValueError(f'unrecognized extra assignment index: {name}')
+        quoted = name.replace('"', '""')
+        columns = [r[2] for r in db.execute(f'PRAGMA index_info("{quoted}")')]
+        if columns != ['follow_id', 'discord_guild_id']:
             raise ValueError(f'unrecognized extra assignment index: {name}')
     duplicates = db.execute(f'''SELECT follow_id, discord_guild_id, COUNT(*)
         FROM {TABLE} GROUP BY follow_id, discord_guild_id HAVING COUNT(*) > 1''').fetchall()
@@ -83,7 +93,8 @@ def align(source: Path, output: Path) -> bool:
     reference, ddl = _reference()
     changed = False
     try:
-        with reference, sqlite3.connect(f'file:{source}?mode=ro', uri=True) as original:
+        # Escape URI-special characters ('?' and '#') in filesystem paths.
+        with reference, sqlite3.connect(source.as_uri() + '?mode=ro', uri=True) as original:
             changed = _guard_source(original, reference, ddl)
             # SQLite backup captures WAL content consistently. The source is
             # read-only here; the operator must keep all writers stopped.
@@ -96,13 +107,26 @@ def align(source: Path, output: Path) -> bool:
                 destination.execute('PRAGMA foreign_keys=OFF')
                 destination.execute('BEGIN IMMEDIATE')
                 try:
-                    destination.execute(f'ALTER TABLE {TABLE} RENAME TO __dev_old_person_assignments')
-                    destination.execute(ddl[TABLE])
-                    cols = ', '.join(COLUMNS)
-                    destination.execute(f'''INSERT INTO {TABLE} ({cols})
-                        SELECT {cols} FROM __dev_old_person_assignments''')
-                    destination.execute('DROP TABLE __dev_old_person_assignments')
-                    destination.execute(ddl[INDEX])
+                    original_ddl = destination.execute(
+                        'SELECT sql FROM sqlite_master WHERE type="table" AND name=?', (TABLE,),
+                    ).fetchone()[0]
+                    if PREVIOUS_CONSTRAINT in original_ddl:
+                        # CP32's table constraint is a different physical
+                        # schema; only this recognized shape needs rebuilding.
+                        destination.execute(f'ALTER TABLE {TABLE} RENAME TO __dev_old_person_assignments')
+                        destination.execute(ddl[TABLE])
+                        cols = ', '.join(COLUMNS)
+                        destination.execute(f'INSERT INTO {TABLE} ({cols}) '
+                                            f'SELECT {cols} FROM __dev_old_person_assignments')
+                        destination.execute('DROP TABLE __dev_old_person_assignments')
+                        destination.execute(ddl[INDEX])
+                    # CP21 just needs one named unique index. Drop any exact
+                    # column-equivalent manual indexes admitted by the guard.
+                    for kind, name, table, sql in _entries(destination):
+                        if table == TABLE and kind == 'index' and name not in (INDEX, NEW_INDEX):
+                            destination.execute(f'DROP INDEX "{name}"')
+                    if not any(name == NEW_INDEX for _, name, _, _ in _entries(destination)):
+                        destination.execute(ddl[NEW_INDEX])
                     if destination.execute(f'SELECT * FROM {TABLE} ORDER BY id').fetchall() != before:
                         raise ValueError('assignment rows changed during v2 alignment')
                     destination.execute('COMMIT')

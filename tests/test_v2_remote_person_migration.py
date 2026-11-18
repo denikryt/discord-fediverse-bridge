@@ -168,11 +168,12 @@ class VersionTwoMigrationTests(unittest.TestCase):
         """Version 2 alone cannot admit an older physical table shape."""
         frozen = Path(__file__).resolve().parents[1] / "src/db/schema_versions/v2.sql"
         current_ddl = frozen.read_text()
-        constraint = "\tCONSTRAINT uq_remote_person_assignment_follow_guild UNIQUE (follow_id, discord_guild_id),\n"
-        self.assertIn(constraint, current_ddl)
+        index = ('CREATE UNIQUE INDEX uq_remote_person_assignment_follow_guild ON '
+                 'remote_person_channel_assignments (follow_id, discord_guild_id);\n')
+        self.assertIn(index, current_ddl)
         with sqlite3.connect(self.path) as connection:
-            # Represent the actual pre-change v2 shape without auto-repairing it.
-            connection.executescript(current_ddl.replace(constraint, ""))
+            # Represent the original CP21 v2 shape without runtime auto-repair.
+            connection.executescript(current_ddl.replace(index, ""))
             connection.execute("PRAGMA user_version=2")
         db = Database(f"sqlite:///{self.path}")
         self.addCleanup(db.close)
