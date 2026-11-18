@@ -176,7 +176,11 @@ class RemotePersonCommentDeliveryWorker:
                 RemotePersonCommentPlacement.state.in_(('pending', 'pending_parent', 'pending_thread')),
                 or_(RemotePersonCommentPlacement.next_attempt_at.is_(None),
                     RemotePersonCommentPlacement.next_attempt_at <= now),
-            ).order_by(RemotePersonCommentPlacement.id).limit(80)).all()
+            # Re-examined unresolved copies go to the back of the durable
+            # eligibility scan. Otherwise the first 80 waiting parents prevent
+            # a later ready placement from ever reaching Discord.
+            ).order_by(RemotePersonCommentPlacement.updated_at,
+                       RemotePersonCommentPlacement.id).limit(80)).all()
             for row in rows:
                 copy = session.get(RemotePersonPostDelivery, row.root_delivery_id)
                 if copy is None:
@@ -202,12 +206,14 @@ class RemotePersonCommentDeliveryWorker:
                     continue
                 if copy.state != 'delivered' or copy.discord_thread_id is None:
                     row.state = 'pending_thread'
+                    row.updated_at = utcnow()  # Persist scan rotation across restarts.
                     continue
                 parent_id = canonical.parent_object_id if isinstance(canonical, InboundConversationObject) \
                     else canonical.in_reply_to_object_id
                 ready, parent_message = self._parent_message(session, root, copy, parent_id)
                 if not ready:
                     row.state = 'pending_parent'
+                    row.updated_at = utcnow()  # A blocked parent must not monopolize the next batch.
                     continue
                 row.state = 'claimed'
                 row.attempt_count += 1

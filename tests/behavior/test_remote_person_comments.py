@@ -150,6 +150,42 @@ class RemotePersonComments(unittest.TestCase):
         parents = {call.channel_id: call.parent_message_id for call in transport.calls[2:]}
         self.assertEqual(parents, {100: 1000001, 101: 1010002})
 
+    def test_ready_comment_progresses_past_eighty_waiting_threads(self):
+        """A ready placement cannot starve behind older unavailable root copies."""
+        self.deliver_roots()
+        with self.db.immediate_session() as session:
+            copy = session.scalar(select(RemotePersonPostDelivery).where(
+                RemotePersonPostDelivery.discord_channel_id == 101))
+            copy.state = 'pending'
+            copy.discord_thread_id = None
+        # Each reply is retained in the delivered A thread and pending B copy;
+        # suppress A for the older rows, leaving eighty genuine blocked jobs.
+        for index in range(80):
+            item = self.event(object_id=f'https://other.example/notes/waiting-{index}')
+            self.assertEqual(self.comments.reserve(item).targets, 2)
+        with self.db.immediate_session() as session:
+            for row in session.scalars(select(RemotePersonCommentPlacement)):
+                copy = session.get(RemotePersonPostDelivery, row.root_delivery_id)
+                if copy.discord_channel_id == 100:
+                    row.state = 'suppressed'
+        healthy = self.event(object_id='https://other.example/notes/ready-after-eighty')
+        self.assertEqual(self.comments.reserve(healthy).targets, 2)
+        worker, edge = self.worker()
+        asyncio.run(worker.drain_once())
+        self.assertEqual(edge.calls, [])  # The first bounded window was blocked.
+        # A fresh worker must continue from persisted ordering rather than
+        # repeatedly selecting the original eighty pending roots.
+        recovered, edge = self.worker()
+        for _ in range(2):
+            asyncio.run(recovered.drain_once())
+            if any(call.object_id == healthy.object.ap_id for call in edge.calls):
+                break
+        self.assertEqual([call.channel_id for call in edge.calls if call.object_id == healthy.object.ap_id], [100])
+        self.assertTrue(all(call.channel_id != 101 for call in edge.calls))
+        with self.db.session() as session:
+            self.assertTrue(any(row.state == 'pending_thread' for row in session.scalars(
+                select(RemotePersonCommentPlacement))))
+
     def test_missing_parent_is_deferred_without_flattening(self):
         """A child stays pending_parent until the copy-local parent is delivered."""
         self.deliver_roots()
