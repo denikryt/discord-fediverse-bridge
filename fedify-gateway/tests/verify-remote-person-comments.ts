@@ -47,3 +47,9 @@ assert.equal(deleted?.object.parent_ap_id, null);
 assert.equal(normalizeDirectRemotePersonCommentFromJson({
   ...signed, object: { ...signed.object, audience: 'https://example.org/category/17' },
 }), null);
+
+// Note.name is the title of the Note, never a Person author username.
+const titled = normalizeDirectRemotePersonCommentFromJson({
+  ...signed, object: { ...signed.object, name: 'Important update' },
+});
+assert.equal(titled?.object.author_name, 'alice');

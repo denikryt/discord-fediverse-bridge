@@ -35,6 +35,7 @@ class CommentDispatch:
     object_id: str
     body: str
     actor_name: str
+    actor_id: str
     parent_message_id: int | None
     revision: str
 
@@ -228,6 +229,9 @@ class RemotePersonCommentDeliveryWorker:
                     object_id=canonical.object_id,
                     body=(getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''),
                     actor_name=getattr(canonical, 'actor_name', None) or getattr(canonical, 'actor_username', None) or 'Remote user',
+                    # Attribution belongs to this Note, not to its root Person.
+                    actor_id=(canonical.actor_id if isinstance(canonical, InboundConversationObject)
+                              else canonical.actor_url),
                     parent_message_id=parent_message,
                     revision=(canonical.revision_fingerprint if isinstance(canonical, InboundConversationObject)
                               else f'published:{canonical.content_revision}'),
@@ -412,6 +416,8 @@ class RemotePersonCommentDeliveryWorker:
                                   getattr(canonical, 'body_markdown', None) or ''),
                             actor_name=(getattr(canonical, 'actor_name', None) or
                                         getattr(canonical, 'actor_username', None) or 'Remote user'),
+                            actor_id=(canonical.actor_id if isinstance(canonical, InboundConversationObject)
+                                      else canonical.actor_url),
                             # A later canonical Update must not be mistaken for
                             # the revision submitted before the POST timeout.
                             parent_message_id=None, revision=row.last_applied_revision or '')

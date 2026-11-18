@@ -27,6 +27,7 @@ class DueDiscordDelivery:
     delivery_id: int
     object_id: str
     actor_name: str | None
+    actor_id: str
     content_markdown: str
     parent_object_id: str | None
     root_object_id: str
@@ -446,6 +447,8 @@ class PersonalFeedConversationRepository:
                         delivery_id=delivery.id,
                         object_id=obj.object_id,
                         actor_name=obj.actor_name,
+                        # A remote child may have a different author from the bound root.
+                        actor_id=obj.actor_id,
                         content_markdown=obj.content_markdown,
                         parent_object_id=obj.parent_object_id,
                         root_object_id=root.object_id,

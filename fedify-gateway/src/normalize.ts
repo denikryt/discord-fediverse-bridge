@@ -117,7 +117,9 @@ export function normalizeDirectRemotePersonEventFromJson(
     source_activity_json: source,
     object: {
       ap_id: objectId,
-      author_name: asString(object?.name) ?? lastPathSegment(actorId),
+      // Note.name describes the Note, never its Person author.
+      // The verified typed actor may supply a profile-level name upstream.
+      author_name: lastPathSegment(actorId),
       avatar_url: null,
       body_markdown: object == null ? null : resolveMarkdownBodyFromJson(object),
       published_at: asString(object?.published),
@@ -151,7 +153,9 @@ export function normalizeDirectRemotePersonCommentFromJson(
     object: {
       ap_id: objectId,
       parent_ap_id: asString(object?.inReplyTo),
-      author_name: asString(object?.name) ?? lastPathSegment(actorId),
+      // Note.name describes the Note, never its Person author.
+      // The verified typed actor may supply a profile-level name upstream.
+      author_name: lastPathSegment(actorId),
       body_markdown: object == null ? null : resolveMarkdownBodyFromJson(object),
       published_at: asString(object?.published),
     },

@@ -67,3 +67,13 @@ async function main(): Promise<void> {
 }
 
 await main();
+
+// Note.name must not be presented as its author identity.
+const titledDirect = normalizeDirectRemotePersonEventFromJson({
+  type: 'Create', id: 'https://remote.example/create/titled',
+  actor: 'https://remote.example/users/bob', to: [PUBLIC],
+  object: { type: 'Note', id: 'https://remote.example/notes/titled',
+    attributedTo: 'https://remote.example/users/bob',
+    name: 'Important update', to: [PUBLIC], content: 'Hello', },
+});
+assert.equal(titledDirect?.object.author_name, 'bob');

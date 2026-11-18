@@ -142,6 +142,8 @@ class RemotePersonComments(unittest.TestCase):
         worker, transport = self.worker()
         asyncio.run(worker.drain_once())
         self.assertEqual(len(transport.calls), 2)
+        # The child is authored by a different Actor from the root Bob.
+        self.assertEqual({call.actor_id for call in transport.calls}, {ALICE})
         self.assertTrue(all(call.parent_message_id is None for call in transport.calls))
         child = self.event(parent=COMMENT, object_id='https://other.example/notes/3')
         self.comments.reserve(child)

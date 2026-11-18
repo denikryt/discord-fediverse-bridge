@@ -56,6 +56,31 @@ function isRemotePersonContentEvent(
     || event.event_type === "remote.person.deleted";
 }
 
+/** Enrich a signed direct Person Note from its own verified Actor profile.
+ *
+ * Profile fetch is presentation-only: errors, mismatched IDs and absent
+ * profiles retain the actor-URI fallback supplied by the JSON normalizer.
+ */
+async function enrichDirectPersonActor(
+  activity: Create | Update,
+  event: RemotePersonContentEvent | RemotePersonCommentEvent,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const actor = await activity.getActor({ suppressError: true });
+    if (actor?.id?.href !== event.actor_id) return null;
+    const profile = await actor.toJsonLd() as Record<string, unknown>;
+    // The title of the Note is not a username. Use only actor-level labels
+    // and never let profile fetch change the verified ActivityPub Actor ID.
+    const candidate = [profile.preferredUsername, profile.name].find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    );
+    if (candidate != null) event.object.author_name = candidate.trim();
+    return profile;
+  } catch {
+    return null;
+  }
+}
+
 export function createGatewayFederation(
   config: GatewayContextData,
 ) {
@@ -171,28 +196,17 @@ export function createGatewayFederation(
             ...outerJson, object: noteJson,
           });
           if (personEvent != null) {
-            // The Note's display name is not its author's canonical handle.
-            // Resolve the actual signed actor identity before presenting a
-            // webhook avatar or preferred username; failure only loses media.
-            try {
-              const remoteActor = await activity.getActor({ suppressError: true });
-              if (remoteActor?.id?.href === personEvent.actor_id) {
-                const profile = await remoteActor.toJsonLd() as Record<string, unknown>;
-                if (typeof profile.preferredUsername === "string") {
-                  personEvent.object.author_name = profile.preferredUsername;
-                }
-                const icon = profile.icon;
-                if (icon != null && typeof icon === "object") {
-                  const iconJson = icon as Record<string, unknown>;
-                  const candidate = iconJson.url;
-                  personEvent.object.avatar_url = typeof candidate === "string" ? candidate
-                    : candidate != null && typeof candidate === "object"
-                      ? (candidate as Record<string, unknown>).href as string | undefined ?? null
-                      : null;
-                }
+            const profile = await enrichDirectPersonActor(activity, personEvent);
+            if (profile != null) {
+              const icon = profile.icon;
+              if (icon != null && typeof icon === "object") {
+                const iconJson = icon as Record<string, unknown>;
+                const candidate = iconJson.url;
+                personEvent.object.avatar_url = typeof candidate === "string" ? candidate
+                  : candidate != null && typeof candidate === "object"
+                    ? (candidate as Record<string, unknown>).href as string | undefined ?? null
+                    : null;
               }
-            } catch (error) {
-              logDebug(isDebug, "Remote Person profile unavailable for webhook presentation");
             }
             await deliverNormalizedEvent(config, personEvent, {
               deliveryId: personEvent.delivery_id,
@@ -211,6 +225,7 @@ export function createGatewayFederation(
               ...outerJson, object: noteJson,
             });
             if (event != null) {
+              await enrichDirectPersonActor(activity, event);
               // A verified public child may precede its canonical parent.
               // Python retains it without any Discord side effect until the
               // parent resolves to an accepted remote Person root. Known
@@ -540,6 +555,7 @@ export async function deliverDirectUpdateActivity(
       if (target?.publicationContext === "remote_person_feed" && id !== target.rootObjectId) {
         const event = normalizeDirectRemotePersonCommentFromJson(sourceActivityJson);
         if (event != null) {
+          await enrichDirectPersonActor(activity, event);
           await deliverNormalizedEvent(config, event, {
             deliveryId: event.delivery_id, eventType: event.event_type, objectId: id,
           });
@@ -558,6 +574,7 @@ export async function deliverDirectUpdateActivity(
   event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
   if (isRemotePersonContentEvent(event)) {
+    await enrichDirectPersonActor(activity, event);
     await deliverNormalizedEvent(config, event, {
       deliveryId: event.delivery_id, eventType: event.event_type, objectId: event.object.ap_id,
     });
