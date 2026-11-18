@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
+from unittest.mock import patch
 import unittest
 
 from src.fluxer_adapter import FluxerAdapter
@@ -20,6 +22,45 @@ from src.platform_types import (
     ChannelRef, ContentDocument, CreateAttempt, DeliveryPresentation, MessageRef,
     PlatformOperationError, ThreadRef,
 )
+
+
+def publish_acl_snapshot(path: Path, state: dict[str, bool]) -> None:
+    """Atomically publish test SDK ACL/tag/gateway state for the Node poller.
+
+    The Node fixture reads this path on a 5ms interval. Writing directly to
+    the published file can expose a zero-length or truncated JSON snapshot;
+    use a sibling temporary file and a same-filesystem atomic replacement.
+    """
+    staged: Path | None = None
+    try:
+        with NamedTemporaryFile('w', encoding='utf-8', dir=path.parent,
+                                prefix=f'.{path.name}.', suffix='.tmp',
+                                delete=False) as output:
+            staged = Path(output.name)
+            json.dump(state, output)
+            output.write('\n')
+        os.replace(staged, path)
+    finally:
+        # Do not leave temporary provider state behind if writing or replace
+        # fails. The currently published valid ACL remains authoritative.
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+
+
+class ACLFixturePublicationContracts(unittest.TestCase):
+    """Verify failed test-state publications do not corrupt the live ACL."""
+
+    def test_replace_failure_preserves_old_state_and_cleans_staging_file(self) -> None:
+        """A failed atomic publish leaves the last valid provider snapshot readable."""
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'acl.json'
+            old_acl = {'forum_send': True, 'thread_send': True}
+            publish_acl_snapshot(path, old_acl)
+            with patch(__name__ + '.os.replace', side_effect=OSError('simulated failure')):
+                with self.assertRaises(OSError):
+                    publish_acl_snapshot(path, {'forum_send': False, 'thread_send': True})
+            self.assertEqual(json.loads(path.read_text()), old_acl)
+            self.assertEqual(list(Path(directory).iterdir()), [path])
 
 
 class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
@@ -33,7 +74,7 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
         self.tmp = TemporaryDirectory()
         self.effects = Path(self.tmp.name) / 'effects.jsonl'
         self.acl_state = Path(self.tmp.name) / 'acl.json'
-        self.acl_state.write_text(json.dumps({'forum_send': True, 'thread_send': True}))
+        publish_acl_snapshot(self.acl_state, {'forum_send': True, 'thread_send': True})
         self.instance_origin = ('https://xn--fa-hia.test' if self._testMethodName ==
                                 'test_ascii_alabel_matches_authenticated_node_origin'
                                 else 'https://fx.test')
@@ -186,9 +227,9 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
             (True, True, True), (False, True, True), (True, False, False),
         )):
             with self.subTest(forum_send=forum_send, thread_send=thread_send):
-                self.acl_state.write_text(json.dumps({
+                publish_acl_snapshot(self.acl_state, {
                     'forum_send': forum_send, 'thread_send': thread_send,
-                }))
+                })
                 # The second successful message replies to the immediately
                 # preceding message, not to a synthetic top-level thread root.
                 parent = (root.starter if index != 1 else
@@ -234,6 +275,64 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(records[-2]['options']['replyTo']['messageId'],
                                      parent.external_message_id)
 
+    async def test_acl_state_publication_never_exposes_partial_json_to_node(self) -> None:
+        """A paused test writer leaves Node polling a complete old ACL until replace."""
+        reached_replace = threading.Event()
+        release_replace = threading.Event()
+        real_replace = os.replace
+
+        def pause_before_replace(source: os.PathLike[str], target: os.PathLike[str]) -> None:
+            """Hold the staged snapshot before publication, not during JSON serialization."""
+            reached_replace.set()
+            if not release_replace.wait(timeout=5):
+                raise TimeoutError('ACL test writer was not released')
+            real_replace(source, target)
+
+        new_acl = {'forum_send': True, 'thread_send': True, 'tag_removed': True}
+        with patch(__name__ + '.os.replace', side_effect=pause_before_replace):
+            writer = asyncio.create_task(asyncio.to_thread(
+                publish_acl_snapshot, self.acl_state, new_acl,
+            ))
+            try:
+                self.assertTrue(await asyncio.to_thread(reached_replace.wait, 3))
+                # Leave the 5ms SDK Gateway timer ample time to poll while the
+                # replacement snapshot is staged but has not been published.
+                await asyncio.sleep(0.10)
+                self.assertIsNone(self.node.returncode, 'Node must not parse partial JSON')
+                self.assertEqual(json.loads(self.acl_state.read_text()),
+                                 {'forum_send': True, 'thread_send': True})
+                old_policy = await self.rpc.call('capabilities', {'channel_id': 'forum-1'})
+                self.assertEqual(old_policy['available_tags'],
+                                 [{'id': 'tag-a', 'moderated': False}])
+            finally:
+                release_replace.set()
+                await writer
+
+        # A new provider snapshot must be used by the same live Node process.
+        current = await self.rpc.call('capabilities', {'channel_id': 'forum-1'})
+        self.assertEqual(current['available_tags'], [])
+        with self.assertRaises(PlatformOperationError) as blocked:
+            await self.adapter.create_forum_thread(
+                self.forum, ContentDocument('removed tag'), title='Topic',
+                presentation=DeliveryPresentation('bot'), attempt=self.attempt,
+            )
+        self.assertEqual(blocked.exception.reason, 'unsupported')
+        self.assertFalse(self.effects.exists(), 'No physical POST with removed tag')
+        self.assertIsNone(self.node.returncode)
+
+        # The same publication path also carries Gateway-state updates.
+        publish_acl_snapshot(self.acl_state, {
+            'forum_send': True, 'thread_send': True, 'gateway_disconnect': True,
+        })
+        for _ in range(100):
+            health = await self.rpc.call('health', {})
+            if health['state'] != 'ready':
+                break
+            await asyncio.sleep(0.01)
+        else:
+            self.fail('Published SDK disconnect was not observed')
+        self.assertIsNone(self.node.returncode, 'Gateway gap must not crash Node fixture')
+
     async def test_forum_acl_revoked_between_python_preflight_and_node_write(self) -> None:
         """A stale Python permission success never authorizes the Node REST POST."""
         original = self.rpc.call
@@ -243,9 +342,9 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
             """Change only the external SDK permission state after Python admission."""
             if operation == 'create_forum_thread':
                 observed.append(operation)
-                self.acl_state.write_text(json.dumps({
+                publish_acl_snapshot(self.acl_state, {
                     'forum_send': False, 'thread_send': True,
-                }))
+                })
             return await original(operation, args, **kwargs)
 
         self.rpc.call = change_at_write
@@ -267,9 +366,9 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
             """Revoke the selected tag after the first Python capabilities check."""
             if operation == 'create_forum_thread':
                 observed.append(operation)
-                self.acl_state.write_text(json.dumps({
+                publish_acl_snapshot(self.acl_state, {
                     'forum_send': True, 'thread_send': True, 'tag_removed': True,
-                }))
+                })
             return await original(operation, args, **kwargs)
 
         self.rpc.call = change_at_write
@@ -291,10 +390,10 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
             """Wait for a real SDK shard event to degrade Node before dispatching."""
             if operation == 'create_forum_thread':
                 observed.append(operation)
-                self.acl_state.write_text(json.dumps({
+                publish_acl_snapshot(self.acl_state, {
                     'forum_send': True, 'thread_send': True,
                     'gateway_disconnect': True,
-                }))
+                })
                 for _ in range(100):
                     health = await original('health', {})
                     if health['state'] != 'ready':

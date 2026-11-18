@@ -761,3 +761,16 @@ Python dependency is now pinned exactly to 2.14.1 in `pyproject.toml`, with
 `uv.lock` metadata aligned; Docker's `pip install .` uses that requirement.
 Any dependency upgrade must repeat FIFO, precedence and multi-file-empty
 tests. Actual Docker build and S19 Fluxer acceptance remain external checks.
+
+
+## Plan 145 F2 — cross-process ACL fixture publication (fixed locally, 2026-11-18)
+
+The forum-create SDK test fixture polls ACL/tag/Gateway JSON every 5 ms. Python's
+previous `Path.write_text()` updates could expose a truncated intermediate JSON
+and crash the Node fixture without an attempted write. All live ACL updates now
+publish a complete sibling temporary file with atomic `os.replace()`. A
+cross-process regression pauses before replacement: Node continues serving the
+old valid snapshot, then observes updated tag/Gateway state. Replacement
+failure preserves the previous ACL. The affected Python suites pass locally;
+full dependency-backed Python/Node suites and VM live acceptance were not run
+on this fix. P0–P2 workflow completeness and S19 remain separate work.
