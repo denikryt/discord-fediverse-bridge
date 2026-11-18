@@ -20,6 +20,9 @@ const TEST_ORIGIN = "https://discord-bridge.example.com/";
 const REMOTE_ORIGIN = "https://lemmy.example/";
 
 async function main(): Promise<void> {
+  // Check the remote Group regression before older, independently failing
+  // Community Update probes so this assertion remains observable in isolation.
+  await testRemoteCommunityGroupDeleteStaysInCommunityRouting();
   await testDirectUpdateDeliversCommentUpdatedEvent();
   await testDirectDeleteDeliversCommentDeletedEvent();
   await testDirectPersonUpdatePreservesCanonicalPublicAudience();
@@ -183,6 +186,31 @@ async function testKnownPersonRootDeleteUsesCanonicalTargetNotUrlPath(): Promise
     const event = JSON.parse(capture.body) as Record<string, unknown>;
     assert.equal(event.event_type, 'remote.person.deleted');
     assert.equal((event.object as Record<string, unknown>).ap_id, root);
+  } finally {
+    await capture.close();
+  }
+}
+
+/** Signed Delete of a subscribed remote Group post must retain Community routing.
+ * A failed Person conversation-target lookup does not mean it is a Person Note:
+ * the Group audience still carries the origin routing evidence.
+ */
+async function testRemoteCommunityGroupDeleteStaysInCommunityRouting(): Promise<void> {
+  const capture = await startCaptureServer();
+  try {
+    const group = new URL('https://remote.example/category/1');
+    const activity = new Delete({
+      id: new URL('https://remote.example/activities/delete-post-42'),
+      actor: new URL('https://author.example/actors/alice'),
+      object: new URL('https://remote.example/post/42'),
+      audience: group,
+    });
+    await deliverDirectDeleteActivity(buildConfig(capture.url), activity);
+    assert.ok(capture.body != null);
+    const payload = JSON.parse(capture.body) as Record<string, unknown>;
+    assert.equal(payload.event_type, 'post.deleted');
+    assert.equal(payload.community_actor_id, group.href);
+    assert.equal((payload.object as Record<string, unknown>).ap_id, 'https://remote.example/post/42');
   } finally {
     await capture.close();
   }

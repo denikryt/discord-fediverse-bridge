@@ -18,7 +18,18 @@ function stableJson(value: unknown): string {
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
 }
 
-function buildRequest(kind: "content_update" | "content_delete", targetInboxUrls: string[] | null = []) {
+/** Fixture identities are always present, even though production API fields
+ * are optional. Keep the update-only fields narrowed for Unicode hashing.
+ */
+type UpdateFixture = UpdateContentRequest & {
+  kind: "post"; title: string; bodyMarkdown: string; inReplyToObjectId: null;
+  operationId: string; activityId: string;
+};
+type DeleteFixture = DeleteContentRequest & { operationId: string; activityId: string };
+function buildRequest(kind: "content_update", targetInboxUrls?: string[] | null): UpdateFixture;
+function buildRequest(kind: "content_delete", targetInboxUrls?: string[] | null): DeleteFixture;
+function buildRequest(kind: "content_update" | "content_delete", targetInboxUrls?: string[] | null): UpdateFixture | DeleteFixture;
+function buildRequest(kind: "content_update" | "content_delete", targetInboxUrls: string[] | null = []): UpdateFixture | DeleteFixture {
   const base = {
     actorUsername: "alice",
     communityActorUrl: "https://remote.example/c/group",

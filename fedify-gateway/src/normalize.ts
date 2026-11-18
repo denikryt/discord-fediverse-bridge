@@ -1168,17 +1168,13 @@ function parseLemmyNumericIdOrZero(apId: string, kind: "post" | "comment"): numb
   return tryParseLemmyNumericId(apId, kind) ?? 0;
 }
 
-function resolveCommunityActorIdForDelete(
+export function resolveCommunityActorIdForDelete(
   activity: Record<string, unknown>,
 ): string | null {
   // audience is present on the Delete record itself in Lemmy 0.19 (confirmed from real logs).
   // Fall back to the first community actor id found in cc or to.
-  const audience = asString(activity.audience);
-  if (audience && isCommunityActorId(audience)) {
-    return audience;
-  }
-
   const candidates = [
+    ...normalizeStringArray(activity.audience),
     ...normalizeStringArray(activity.cc),
     ...normalizeStringArray(activity.to),
   ];

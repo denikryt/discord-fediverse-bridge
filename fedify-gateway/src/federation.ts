@@ -28,6 +28,7 @@ import {
   normalizeCreateActivityFromJson,
   normalizeUpdateActivityFromJson,
   normalizeDeleteActivityFromJson,
+  resolveCommunityActorIdForDelete,
 } from "./normalize.js";
 import { getPythonBridgeClient } from "./python-bridge-client.js";
 import { admitRemoteDeliveryEndpoint, type RemoteEndpointAdmissionOptions } from "./remote-delivery-endpoints.js";
@@ -621,6 +622,13 @@ export async function deliverDirectDeleteActivity(
     }
     return;
   }
+  // Normalization recognizes explicit remote Group audience/cc addresses.
+  // A missing Person target is not proof that an already-mapped Community
+  // post belongs to a Person feed; keep the Community route authoritative.
+  const normalized = await normalizeDeleteActivityFromJson(sourceActivityJson, {
+    pythonBridgeClient: getPythonBridgeClient(config),
+  });
+  const groupAddressed = resolveCommunityActorIdForDelete(sourceActivityJson) != null;
   if (deletedId != null && target == null) {
     // An unknown object's URL path cannot prove whether it is a Note root,
     // reply, or a Lemmy-style /post/ ID. For signed direct Person inboxes,
@@ -639,7 +647,7 @@ export async function deliverDirectDeleteActivity(
         return group?.actorId.href ?? null;
       },
     );
-    if (destination.kind === "remote") {
+    if (destination.kind === "remote" && !groupAddressed) {
       const provisional = normalizeDirectRemotePersonCommentFromJson(sourceActivityJson);
       if (provisional != null) {
         await deliverNormalizedEvent(config, provisional, {
@@ -650,11 +658,11 @@ export async function deliverDirectDeleteActivity(
       }
     }
   }
-  const event = await normalizeDeleteActivityFromJson(sourceActivityJson, { pythonBridgeClient: getPythonBridgeClient(config) });
-  if (event == null) {
+  if (normalized == null) {
     logDebug(isDebug, "normalizeDeleteActivityFromJson returned null for direct Delete");
     return;
   }
+  const event = normalized;
   event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
   if (isRemotePersonContentEvent(event)) {
