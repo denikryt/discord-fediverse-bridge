@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -20,6 +21,98 @@ class MutationClaimSlotScenarios(unittest.TestCase):
     _add_older_settled_copies_and_new_lagging_copy = (
         mutation_fixture.PhysicalMutationScenario._add_older_settled_copies_and_new_lagging_copy
     )
+
+    def test_stale_update_ack_then_delete_cannot_resurrect_after_worker_restarts(self) -> None:
+        """A held revision-1 write cannot settle revision 2 or resurrect a deleted post."""
+        class StateAwareSdk:
+            """Record effects at the physical boundary while delaying chosen edits."""
+
+            def __init__(self):
+                """Initialize independently controlled provider barriers."""
+                self.effects = []
+                self.entered = asyncio.Event()
+                self.release = asyncio.Event()
+                self.pause = False
+
+            async def fetch_message(self, message):
+                """Attest the same physical bot-owned starter across workers."""
+                return MessageView(message, AuthorRef(
+                    message.connector_key, '999', 'bot', 'Bridge', True,
+                ))
+
+            async def edit_message(self, message, content):
+                """Block exactly the selected in-flight edit before physical success."""
+                if self.pause:
+                    self.entered.set()
+                    await self.release.wait()
+                    self.pause = False
+                self.effects.append(('edit', message.external_message_id, content.body))
+
+            async def delete_message(self, message):
+                """Record the terminal effect without allowing a late edit afterward."""
+                self.effects.append(('delete', message.external_message_id, None))
+
+        sdk = StateAwareSdk()
+
+        def restarted_worker():
+            """Rebuild the production mutation coordinator but retain external effects."""
+            worker, _ = self._worker()
+            worker.registry.get = lambda _key: sdk
+            return worker
+
+        def change_revision(revision: int, *, body: str | None = None,
+                            deleted: bool = False) -> None:
+            """Commit a newer canonical revision while an older SDK call awaits."""
+            with self.db.immediate_session() as session:
+                post = session.get(LocalCommunityThread, self.post_id)
+                post.content_revision = revision
+                if body is not None:
+                    snapshot = json.loads(post.current_content_json)
+                    snapshot['bodyMarkdown'] = body
+                    post.current_content_json = json.dumps(snapshot)
+                if deleted:
+                    post.deleted_at = datetime.now(timezone.utc)
+
+        async def scenario() -> None:
+            """Use two barriers and separate coordinators to expose stale ACKs."""
+            sdk.pause = True
+            first = asyncio.create_task(restarted_worker().drain(limit=1))
+            await asyncio.wait_for(sdk.entered.wait(), 5)
+            change_revision(2, body='revision two')
+            sdk.release.set()
+            self.assertEqual(await first, 1)
+            with self.db.session() as session:
+                copy = session.get(LocalCommunityThreadSurface, self.copy_id)
+                self.assertEqual(copy.applied_revision, 1)
+                self.assertEqual(copy.mutation_state, 'idle')
+            self.assertEqual(await restarted_worker().drain(limit=1), 1)
+            self.assertEqual(sdk.effects[-1], ('edit', '901', 'revision two'))
+            with self.db.session() as session:
+                self.assertEqual(session.get(LocalCommunityThreadSurface, self.copy_id).applied_revision, 2)
+
+            sdk.entered = asyncio.Event()
+            sdk.release = asyncio.Event()
+            sdk.pause = True
+            change_revision(3, body='revision three')
+            third = asyncio.create_task(restarted_worker().drain(limit=1))
+            await asyncio.wait_for(sdk.entered.wait(), 5)
+            change_revision(4, deleted=True)
+            sdk.release.set()
+            self.assertEqual(await third, 1)
+            with self.db.session() as session:
+                self.assertEqual(session.get(LocalCommunityThreadSurface, self.copy_id).applied_revision, 3)
+                self.assertIsNotNone(session.get(LocalCommunityThread, self.post_id).deleted_at)
+            self.assertEqual(await restarted_worker().drain(limit=1), 1)
+            self.assertEqual(sdk.effects[-1], ('delete', '901', None))
+            self.assertEqual(await restarted_worker().drain(limit=1), 0)
+            self.assertEqual(len(sdk.effects), 4)
+            with self.db.session() as session:
+                copy = session.get(LocalCommunityThreadSurface, self.copy_id)
+                self.assertEqual(copy.applied_revision, 4)
+                self.assertEqual(copy.mutation_state, 'idle')
+                self.assertIsNotNone(session.get(LocalCommunityThread, self.post_id).deleted_at)
+
+        asyncio.run(scenario())
 
     def test_lost_mutation_ack_persists_unresolved_across_coordinator_restart(self) -> None:
         """A direct SDK lost ACK cannot be retried by a new SQLite coordinator."""

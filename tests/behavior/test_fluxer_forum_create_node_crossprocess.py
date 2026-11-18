@@ -234,6 +234,88 @@ class FluxerForumCreateCrossProcess(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(records[-2]['options']['replyTo']['messageId'],
                                      parent.external_message_id)
 
+    async def test_forum_acl_revoked_between_python_preflight_and_node_write(self) -> None:
+        """A stale Python permission success never authorizes the Node REST POST."""
+        original = self.rpc.call
+        observed = []
+
+        async def change_at_write(operation, args, **kwargs):
+            """Change only the external SDK permission state after Python admission."""
+            if operation == 'create_forum_thread':
+                observed.append(operation)
+                self.acl_state.write_text(json.dumps({
+                    'forum_send': False, 'thread_send': True,
+                }))
+            return await original(operation, args, **kwargs)
+
+        self.rpc.call = change_at_write
+        with self.assertRaises(PlatformOperationError) as denied:
+            await self.adapter.create_forum_thread(
+                self.forum, ContentDocument('stale ACL'), title='Topic',
+                presentation=DeliveryPresentation('bot'), attempt=self.attempt,
+            )
+        self.assertEqual(denied.exception.reason, 'forbidden')
+        self.assertEqual(observed, ['create_forum_thread'])
+        self.assertFalse(self.effects.exists(), 'Node must refuse before SDK POST')
+
+    async def test_forum_tag_removed_between_python_preflight_and_node_write(self) -> None:
+        """The production Node executor re-reads tag policy, not Python's old snapshot."""
+        original = self.rpc.call
+        observed = []
+
+        async def change_at_write(operation, args, **kwargs):
+            """Revoke the selected tag after the first Python capabilities check."""
+            if operation == 'create_forum_thread':
+                observed.append(operation)
+                self.acl_state.write_text(json.dumps({
+                    'forum_send': True, 'thread_send': True, 'tag_removed': True,
+                }))
+            return await original(operation, args, **kwargs)
+
+        self.rpc.call = change_at_write
+        with self.assertRaises(PlatformOperationError) as denied:
+            await self.adapter.create_forum_thread(
+                self.forum, ContentDocument('removed tag'), title='Topic',
+                presentation=DeliveryPresentation('bot'), attempt=self.attempt,
+            )
+        self.assertEqual(denied.exception.reason, 'unsupported')
+        self.assertEqual(observed, ['create_forum_thread'])
+        self.assertFalse(self.effects.exists(), 'Removed tag must refuse before SDK POST')
+
+    async def test_gateway_disconnected_after_python_preflight_blocks_node_write(self) -> None:
+        """An SDK shard loss between two admission levels blocks the pending Create."""
+        original = self.rpc.call
+        observed = []
+
+        async def disconnect_at_write(operation, args, **kwargs):
+            """Wait for a real SDK shard event to degrade Node before dispatching."""
+            if operation == 'create_forum_thread':
+                observed.append(operation)
+                self.acl_state.write_text(json.dumps({
+                    'forum_send': True, 'thread_send': True,
+                    'gateway_disconnect': True,
+                }))
+                for _ in range(100):
+                    health = await original('health', {})
+                    if health['state'] != 'ready':
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    self.fail('SDK shardDisconnect did not revoke Node readiness')
+            return await original(operation, args, **kwargs)
+
+        self.rpc.call = disconnect_at_write
+        with self.assertRaises(PlatformOperationError) as denied:
+            await self.adapter.create_forum_thread(
+                self.forum, ContentDocument('stale READY'), title='Topic',
+                presentation=DeliveryPresentation('bot'), attempt=self.attempt,
+            )
+        # A 503 on a write is conservatively classified as unknown_delivery
+        # by the Python RPC boundary even when this fixture proves no POST.
+        self.assertEqual(denied.exception.reason, 'unknown_delivery')
+        self.assertEqual(observed, ['create_forum_thread'])
+        self.assertFalse(self.effects.exists(), 'Gap must refuse before SDK POST')
+
     async def test_health_agrees_with_python_canonical_origin_only(self) -> None:
         """Canonical case/default-port spellings match; a different origin cannot attest."""
         from src.fluxer_connector_config import parse_fluxer_connectors

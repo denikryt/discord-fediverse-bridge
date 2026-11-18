@@ -18,6 +18,14 @@ if (!logPath) throw Error('test requires external effects log');
 const restOmissions=process.argv[4]==='rest-omissions';
 const starterId=restOmissions?'thread-9':'starter-91';
 const emitter=new EventEmitter();
+// The SDK fake models asynchronous permission/tag changes at the provider
+// boundary; only public Gateway lifecycle events control the real service gate.
+let gapSignalled=false;
+const gatewayObservation=setInterval(()=>{
+  const requested=currentAcl().gateway_disconnect===true;
+  if(requested&&!gapSignalled){emitter.emit('shardDisconnect');gapSignalled=true;}
+},5);
+gatewayObservation.unref();
 const threads=new Map();
 const messages=new Map();
 function channel(id, kind, parentId=null) {
@@ -65,7 +73,8 @@ const client={on:emitter.on.bind(emitter),off:emitter.off.bind(emitter),
   rest:{baseUrl:'https://api.fx.test/v1',
     async get(route){
       if(route==='/channels/forum-1')return {id:'forum-1',guild_id:'guild-1',
-        type:15,flags:16,available_tags:[{id:'tag-a',moderated:false}]};
+        type:15,flags:16,available_tags:currentAcl().tag_removed===true?[]:
+          [{id:'tag-a',moderated:false}]};
       throw Error('invalid REST path');
     },
     async post(route,opts){
