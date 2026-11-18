@@ -7,6 +7,9 @@ HTTP is replaced. It can run via unittest with a minimal discord import stub.
 from __future__ import annotations
 
 import json
+import importlib.util
+import sys
+import types
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -14,6 +17,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from sqlalchemy import select
+
+# Offline behavioral tests stub only Discord's outbound SDK type annotation.
+if importlib.util.find_spec("discord") is None:
+    discord_stub = types.ModuleType("discord")
+    discord_stub.MessageReference = type("MessageReference", (), {})
+    sys.modules.setdefault("discord", discord_stub)
 
 from src.content_sync.persistence import persist_publish_artifacts
 from src.db import Database
@@ -113,6 +122,34 @@ class DirectPersonMutationTests(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         return result
+
+    def test_new_update_request_is_timezone_aware_after_sqlite_restart(self):
+        """A local edit yields a Temporal-compatible instant before operation hashing."""
+        self.delivered_create()
+        from datetime import timedelta
+        edit_time = datetime(2026, 11, 16, 3, 0, tzinfo=timezone(timedelta(hours=2)))
+        self.assertEqual(self.database.content_mutations.record_desired_update(
+            object_id=OBJECT, title=None, body_markdown="edited", edited_timestamp=edit_time,
+        ), "accepted")
+        self.database.content_mutations.reserve_next(object_id=OBJECT, target_inbox_urls=None)
+        [claim] = self.database.content_mutations.claim_due(limit=2, stale_after_seconds=60)
+        instant = datetime.fromisoformat(claim.request["mutationTimestamp"])
+        self.assertIsNotNone(instant.utcoffset())
+        self.assertEqual(instant.astimezone(timezone.utc), datetime(2026, 11, 16, 1, tzinfo=timezone.utc))
+        # Reconstruct the same durable claim without a second reservation.
+        with self.database.session() as session:
+            from src.models import UserActorContentMutation
+            row = session.get(UserActorContentMutation, claim.mutation_id)
+            self.assertEqual(json.loads(row.request_json)["mutationTimestamp"], claim.request["mutationTimestamp"])
+            self.assertEqual(row.operation_id, claim.operation_id)
+
+    def test_delete_without_edit_timestamp_keeps_nullable_gateway_field(self):
+        """Delete of an unchanged Note needs no synthetic Update instant."""
+        self.delivered_create()
+        self.assertEqual(self.database.content_mutations.record_desired_delete(object_id=OBJECT), "accepted")
+        self.database.content_mutations.reserve_next(object_id=OBJECT, target_inbox_urls=None)
+        [claim] = self.database.content_mutations.claim_due(limit=2, stale_after_seconds=60)
+        self.assertIsNone(claim.request["mutationTimestamp"])
 
     def test_cannot_mutate_a_direct_reply_before_original_create_is_delivered(self):
         """Parent author must never receive Update before acknowledging Create."""

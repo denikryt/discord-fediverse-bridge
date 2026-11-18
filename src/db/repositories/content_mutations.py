@@ -29,6 +29,19 @@ from ...activitypub_identity_urls import (
 from .base import BaseRepository
 
 
+def _utc_mutation_timestamp(value: datetime | None) -> str | None:
+    """Serialize a new mutation as an absolute UTC instant for Fedify Temporal.
+
+    SQLite returns naive values even when the original edit carried an offset;
+    persisted bridge timestamps are UTC, not local machine wall-clock time.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 @dataclass(frozen=True, slots=True)
 class ClaimedContentMutation:
     """Describe one exclusively claimed replayable gateway operation."""
@@ -90,6 +103,9 @@ class ContentMutationRepository(BaseRepository):
                 current_ts = current_ts.replace(tzinfo=timezone.utc)
             if edited_timestamp.tzinfo is None:
                 edited_timestamp = edited_timestamp.replace(tzinfo=timezone.utc)
+            # Normalize at admission, before SQLite discards timezone metadata.
+            # Otherwise +02:00 edits are mistaken for a different UTC instant.
+            edited_timestamp = edited_timestamp.astimezone(timezone.utc)
             if current_ts is not None and edited_timestamp < current_ts:
                 return "stale"
             if current_ts is not None and edited_timestamp == current_ts:
@@ -234,11 +250,9 @@ class ContentMutationRepository(BaseRepository):
             **({"directGroupRecipients": direct_recipients,
                 "softwareProfile": direct_recipients[0]["softwareProfile"]}
                if direct_recipients is not None else {}),
-            "mutationTimestamp": (
-                published.desired_edited_timestamp.isoformat()
-                if published.desired_edited_timestamp is not None
-                else None
-            ),
+            # Normalize before both request persistence and operation fingerprint:
+            # a timezone-free instant fails the gateway's Temporal.Instant.from.
+            "mutationTimestamp": _utc_mutation_timestamp(published.desired_edited_timestamp),
         }
         expected = published.content_revision
         next_revision = expected + 1

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, model_validator
@@ -639,5 +639,8 @@ def create_internal_fedify_router(runtime: Runtime) -> APIRouter:
 
 
 def _isoformat(value: datetime) -> str:
-    """Serialize persisted timestamps consistently for TypeScript consumers."""
-    return value.isoformat()
+    """Serialize stored UTC timestamps with an explicit offset for gateway consumers."""
+    # SQLite DateTime drops tzinfo; these values are persisted in UTC.
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()

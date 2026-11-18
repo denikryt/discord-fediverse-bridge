@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { Temporal } from "@js-temporal/polyfill";
 import { verifyMutationIdentity, updateContent, deleteContent } from "../src/federation-outbound.js";
 import type { GatewayConfig } from "../src/config.js";
 import type { UpdateContentRequest, DeleteContentRequest } from "../src/types.js";
@@ -45,6 +46,11 @@ function buildRequest(kind: "content_update" | "content_delete", targetInboxUrls
     ? {...base, kind: "post" as const, title: "Topic", bodyMarkdown: "new", inReplyToObjectId: null, operationId, activityId}
     : {...base, operationId, activityId};
 }
+
+// Newly persisted Python edits must supply an absolute instant. The gateway
+// intentionally rejects offset-free historical requests rather than guessing.
+assert.equal(Temporal.Instant.from("2026-11-16T01:00:00+00:00").toString(), "2026-11-16T01:00:00Z");
+assert.throws(() => Temporal.Instant.from("2026-11-16T01:00:00"), /offset|instant|ISO/i);
 
 for (const kind of ["content_update", "content_delete"] as const) {
   const request = buildRequest(kind);
