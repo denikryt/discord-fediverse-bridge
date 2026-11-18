@@ -12,6 +12,8 @@ from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 from .remote_person_feeds import REQUIRED_BOT_PERMISSIONS
+from .formatting import (feed_author_header, render_feed_discord_message,
+                         validate_feed_object_url)
 
 
 class RemoteWebhookUnavailable(RuntimeError):
@@ -82,7 +84,7 @@ def _attachment_urls(source: object) -> list[str]:
 
 
 def remote_root_content(post: object) -> str:
-    """Provide visible CW/media/source context without Discord mentions pinging."""
+    """Render bridge-owned webhook root with fixed author and source identity."""
     try:
         source = json.loads(post.source_activity_json)
     except (TypeError, ValueError):
@@ -90,23 +92,23 @@ def remote_root_content(post: object) -> str:
     note = source.get('object') if isinstance(source, dict) else None
     note = note if isinstance(note, dict) else {}
     warning = str(note.get('summary') or '').strip()
-    lines = []
+    lines: list[str] = []
     if warning:
         lines.append(f'Content warning: {warning}')
     body = str(post.content_markdown or '').strip()
     if body:
         lines.append(body)
     lines.extend(_attachment_urls(source))
-    # The canonical object URL is also a reconciliation key after ambiguous
-    # wait=true POSTs. It must survive length truncation and all edits.
-    canonical_url = str(post.object_id)
-    if len(canonical_url) > 500:
-        raise ValueError('canonical remote Note URL exceeds Discord render budget')
-    available = 2000 - len(canonical_url) - 2
-    main = '\n\n'.join(lines)
-    if len(main) > available:
-        main = main[:max(0, available - 1)] + '…'
-    return f'{main}\n\n{canonical_url}' if main else canonical_url
+    actor = urlsplit(post.remote_actor_id)
+    name = str(post.remote_handle or actor.path.rsplit('/', 1)[-1]).strip('@')
+    # A saved handle may already include the instance host; the Community
+    # formatter adds the host exactly once from the canonical Actor ID.
+    name = name.split('@', 1)[0]
+    header = feed_author_header(name, post.remote_actor_id)
+    footer = validate_feed_object_url(str(post.object_id))
+    return render_feed_discord_message(
+        header=header, body='\n\n'.join(lines), footer=footer,
+    )
 
 
 class RemotePersonWebhookTransport:
@@ -185,11 +187,16 @@ class RemotePersonWebhookTransport:
     async def find_created_root(self, channel_id: int, original_webhook_id: int, object_id: str) -> int | None:
         """Reconcile ambiguous POST by matching this webhook and canonical URL."""
         channel = await self._channel(channel_id)
+        matched: int | None = None
         async for message in channel.history(limit=100):
             if (getattr(message, 'webhook_id', None) == original_webhook_id
                     and str(getattr(message, 'content', '')).splitlines()[-1:] == [object_id]):
-                return int(message.id)
-        return None
+                # Duplicate history matches are not proof of which original
+                # POST owns this durable placement. Keep it uncertain.
+                if matched is not None:
+                    return None
+                matched = int(message.id)
+        return matched
 
     async def edit(self, prepared: PreparedRemoteWebhook, message_id: int, post: object) -> None:
         """Mutate only a known message using its original webhook credentials."""
