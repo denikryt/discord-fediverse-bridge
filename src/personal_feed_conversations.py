@@ -340,19 +340,29 @@ class PersonalFeedConversationRuntime:
         )
         parent_object_id = root.object_id
         if reference_id is not None:
-            mapped = self.database.message_mappings.get_message_mapping_by_discord_message_id(
-                int(reference_id)
+            # Bot-rendered remote comments are delivery receipts, not local
+            # publication mappings. Resolve the *exact* physical thread/root
+            # before falling back to a bridge-authored nested reply parent.
+            remote_parent = self.database.personal_feed_conversations.get_remote_parent_for_discord_reply(
+                root_object_id=root.object_id, thread_id=int(thread_id),
+                message_id=int(reference_id),
             )
-            if mapped is not None and mapped.publication_context == 'personal_feed':
-                # A Discord reply ID is not proof that its ActivityPub object
-                # belongs to this conversation. Validate the stored canonical
-                # root before adopting a nested parent from a generic mapping.
-                context = self.database.personal_feed_conversations.resolve_conversation_object(
-                    mapped.object_id
+            if remote_parent is not None:
+                parent_object_id = remote_parent
+            else:
+                mapped = self.database.message_mappings.get_message_mapping_by_discord_message_id(
+                    int(reference_id)
                 )
-                if (context is not None and context[0] == 'personal_feed'
-                    and context[1] == root.object_id):
-                    parent_object_id = mapped.object_id
+                if mapped is not None and mapped.publication_context == 'personal_feed':
+                    # A Discord reply ID is not proof that its ActivityPub object
+                    # belongs to this conversation. Validate the stored canonical
+                    # root before adopting a nested parent from a generic mapping.
+                    context = self.database.personal_feed_conversations.resolve_conversation_object(
+                        mapped.object_id
+                    )
+                    if (context is not None and context[0] == 'personal_feed'
+                        and context[1] == root.object_id):
+                        parent_object_id = mapped.object_id
         existing = inspect_publish_artifacts(
             self.database,
             source_id=str(message_id),

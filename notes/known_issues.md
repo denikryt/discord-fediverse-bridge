@@ -1,3 +1,17 @@
+## Plan 145 P0 workflow tests and remote Personal Feed reply parent — locally fixed (2026-11-18)
+
+- Three previously missing P0 behavioral sequences now cover the real
+  `/subscribe-community` callback with Accept and unrelated target isolation,
+  Personal Feed worker-owned discussion creation/receipt/echo, and SIGKILL of
+  an in-flight Create after a controlled physical effect but before durable ACK.
+- The worker-driven Personal Feed sequence exposed an existing parent bug:
+  human replies to a bot-rendered remote comment used the AP root instead of
+  the remote comment. Scoped lookup through a proven physical `InboundDiscordDelivery` receipt
+  now resolves the exact remote parent; wrong root/thread IDs cannot match.
+- Focused local checks: 66 PASS, 2 deselected with a temporary Discord SDK import stand-in;
+  actual frozen full suites and operator live OAuth/REST/Gateway remain unrun on
+  this SHA. P1/P2 cross-boundary scenarios and S19 are still open.
+
 ## Discord D1 fixture ActivityPub URLs F1 — fixed locally (2026-11-18)
 
 - The independent full-suite replay on `d22f884` passed 2270 Python tests but
