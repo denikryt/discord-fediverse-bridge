@@ -225,6 +225,57 @@ class RemotePersonComments(unittest.TestCase):
         """A-origin User Actor Note is mirrored as bot in B, never republished."""
         self._assert_local_reply_mirroring()
 
+    def test_twenty_unresolved_history_checks_do_not_starve_later_uncertain(self):
+        """Later history-proven copies are reconciled without a second Discord POST."""
+        self.deliver_roots()
+        for index in range(11):
+            self.assertEqual(self.comments.reserve(self.event(
+                object_id=f'https://other.example/notes/reconcile-{index}')).targets, 2)
+        with self.db.immediate_session() as session:
+            for placement in session.scalars(select(RemotePersonCommentPlacement)):
+                copy = session.get(RemotePersonPostDelivery, placement.root_delivery_id)
+                canonical = session.get(InboundConversationObject, placement.inbound_object_id)
+                placement.state = 'uncertain'
+                placement.destination_thread_id = copy.discord_thread_id
+                placement.last_applied_revision = canonical.revision_fingerprint
+        worker, edge = self.worker()
+        checked = []
+        async def read_history(claim):
+            """The first twenty Discord POSTs remain ambiguous; the last two exist."""
+            checked.append(claim.object_id)
+            return claim.channel_id * 1000 + 7 if claim.object_id.endswith('/reconcile-10') else None
+        edge.find_uncertain = read_history
+        asyncio.run(worker.drain_once())
+        self.assertNotIn('https://other.example/notes/reconcile-10', checked)
+        recovered, _ = self.worker()
+        recovered.transport = edge
+        for _ in range(2):
+            asyncio.run(recovered.drain_once())
+        with self.db.session() as session:
+            rows = list(session.scalars(select(RemotePersonCommentPlacement)))
+            self.assertEqual({row.state for row in rows[-2:]}, {'delivered'})
+            self.assertEqual({row.state for row in rows[:-2]}, {'uncertain'})
+            self.assertTrue(all(row.discord_message_id is not None for row in rows[-2:]))
+        self.assertEqual(edge.calls, [])
+
+    def test_unreadable_comment_history_never_authorizes_repost(self):
+        """A denied Discord history read leaves uncertain identity quarantined."""
+        self.deliver_roots()
+        self.comments.reserve(self.event())
+        worker, edge = self.worker(timeout=True)
+        asyncio.run(worker.drain_once())
+        self.assertEqual(len(edge.calls), 2)
+        async def denied(_claim):
+            """Refuse the history proof without implying the message was absent."""
+            raise PermissionError('history access denied')
+        edge.find_uncertain = denied
+        worker.recover()
+        asyncio.run(worker.drain_once())
+        with self.db.session() as session:
+            self.assertEqual({row.state for row in session.scalars(
+                select(RemotePersonCommentPlacement))}, {'uncertain'})
+        self.assertEqual(len(edge.calls), 2)
+
     def test_uncertain_remote_comment_recovers_sent_revision_then_edits_to_update(self):
         """A timed-out v1 bot POST must not acknowledge a later canonical v2 Update."""
         self.deliver_roots()

@@ -364,6 +364,17 @@ class RemotePersonCommentDeliveryWorker:
                     row.last_applied_revision = revision
                     row.last_error = None
 
+    def _defer_uncertain(self, placement_id: int) -> None:
+        """Rotate an unproven Discord send behind later history checks.
+
+        The persisted sort position survives restart, while the state remains
+        uncertain until an exact prior Discord message is identified.
+        """
+        with self.database.immediate_session() as session:
+            row = session.get(RemotePersonCommentPlacement, placement_id)
+            if row is not None and row.state == 'uncertain':
+                row.updated_at = utcnow()
+
     async def drain_once(self) -> None:
         """Progress waiting parents and dispatch bounded independent destinations."""
         for _ in range(20):
@@ -375,33 +386,45 @@ class RemotePersonCommentDeliveryWorker:
         with self.database.session() as session:
             uncertain = [row.id for row in session.scalars(select(RemotePersonCommentPlacement).where(
                 RemotePersonCommentPlacement.state == 'uncertain',
-            ).order_by(RemotePersonCommentPlacement.id).limit(20))]
+            ).order_by(RemotePersonCommentPlacement.updated_at,
+                       RemotePersonCommentPlacement.id).limit(20))]
         for placement_id in uncertain:
+            claim = None
             with self.database.session() as session:
                 row = session.get(RemotePersonCommentPlacement, placement_id)
-                if row is None or row.destination_thread_id is None:
-                    continue
-                copy = session.get(RemotePersonPostDelivery, row.root_delivery_id)
-                root = session.get(RemotePersonPost, copy.post_id)
-                canonical = session.get(InboundConversationObject, row.inbound_object_id) \
-                    if row.inbound_object_id is not None else session.get(PublishedActivityObject, row.published_object_id)
-                if canonical is None:
-                    continue
-                claim = CommentDispatch(placement_id=row.id, claim_token='', root_id=copy.id,
-                    guild_id=copy.discord_guild_id, channel_id=copy.discord_channel_id,
-                    thread_id=row.destination_thread_id, root_actor_id=root.remote_actor_id,
-                    object_id=canonical.object_id, body=(getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''),
-                    actor_name=getattr(canonical, 'actor_name', None) or getattr(canonical, 'actor_username', None) or 'Remote user',
-                    # Reconciliation identifies the submitted message, not the
-                    # current canonical revision; preserve the send-time proof.
-                    parent_message_id=None, revision=row.last_applied_revision or '')
+                if row is not None and row.destination_thread_id is not None:
+                    copy = session.get(RemotePersonPostDelivery, row.root_delivery_id)
+                    root = session.get(RemotePersonPost, copy.post_id) if copy is not None else None
+                    canonical = (session.get(InboundConversationObject, row.inbound_object_id)
+                                 if row.inbound_object_id is not None else
+                                 session.get(PublishedActivityObject, row.published_object_id))
+                    if canonical is not None and copy is not None and root is not None:
+                        claim = CommentDispatch(placement_id=row.id, claim_token='', root_id=copy.id,
+                            guild_id=copy.discord_guild_id, channel_id=copy.discord_channel_id,
+                            thread_id=row.destination_thread_id, root_actor_id=root.remote_actor_id,
+                            object_id=canonical.object_id,
+                            body=(getattr(canonical, 'content_markdown', None) or
+                                  getattr(canonical, 'body_markdown', None) or ''),
+                            actor_name=(getattr(canonical, 'actor_name', None) or
+                                        getattr(canonical, 'actor_username', None) or 'Remote user'),
+                            # A later canonical Update must not be mistaken for
+                            # the revision submitted before the POST timeout.
+                            parent_message_id=None, revision=row.last_applied_revision or '')
+            if claim is None:
+                self._defer_uncertain(placement_id)
+                continue
             try:
                 found = await self.transport.find_uncertain(claim)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.warning('Remote Person comment reconciliation failed placement=%s', placement_id)
+                self._defer_uncertain(placement_id)
                 continue
             if found is not None:
                 self._complete(claim, found)
+            else:
+                # A negative/partial history read does not prove the POST was
+                # absent. Reconcile other copies rather than retrying blindly.
+                self._defer_uncertain(placement_id)
         await self._mutate_retained()
