@@ -1,3 +1,16 @@
+## Plan 145 F3 — crash-fixture acceptance barrier (fixed locally, 2026-11-19)
+
+The P0 accepted-Create/SIGKILL test used existence of a physical JSONL file
+as its acceptance barrier, but `open(..., 'a')` made that path visible before
+writing or fsync. A controlled pause between open and write reproduced a false
+crash point. The provider now writes/fsyncs a sibling temporary file and
+atomically replaces the acceptance marker; the test blocks publication until
+the parent verifies the marker is absent, then releases and SIGKILLs only
+after reading one complete record. The existing SQLite claim, cold recovery,
+lease-expiry and no-repost assertions are preserved. This fixes test
+synchronization only; production delivery behavior is unchanged. Full frozen
+suite and S19 acceptance still require their own runs.
+
 ## Plan 145 P0 workflow tests and remote Personal Feed reply parent — locally fixed (2026-11-18)
 
 - Three previously missing P0 behavioral sequences now cover the real

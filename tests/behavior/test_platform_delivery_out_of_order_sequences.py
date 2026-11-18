@@ -223,12 +223,15 @@ finally:
         root = Path(__file__).resolve().parents[2]
         db_path = str(self.database.engine.url)
         side_effect = Path(self.database.engine.url.database).with_suffix('.physical.jsonl')
+        prepublish = side_effect.with_suffix('.staged')
+        release = side_effect.with_suffix('.release')
         # The subprocess executes the real coordinator and a committed
-        # dispatch claim. Its controlled provider durably records the physical
-        # Create, then blocks without returning an ACK. A parent-side SIGKILL
-        # interrupts the actual in-flight SDK await, not a later retry.
+        # dispatch claim. Its controlled provider publishes the fsynced Create
+        # atomically, then withholds the ACK. SIGKILL interrupts that in-flight
+        # operation, not a later recovery attempt.
         child_script = """
-import asyncio, json, os, sys
+import asyncio, json, os, sys, tempfile
+from pathlib import Path
 from src.db import Database
 from src.content_sync.platform_fanout import PlatformFanoutCoordinator
 from src.platform_types import ChannelRef, ContentDocument, DeliveryPresentation
@@ -238,12 +241,27 @@ class AcceptedThenKilled:
     '''Record an accepted external Create and deliberately withhold its ACK.'''
 
     async def create_forum_thread(self, forum, content, *, title, presentation, attempt):
-        '''Fsync the physical effect before blocking inside the SDK await.'''
-        with open(sys.argv[4], 'a', encoding='utf-8') as physical:
+        '''Publish a complete fsynced effect before withholding the SDK ACK.'''
+        effect = Path(sys.argv[4])
+        # The active acceptance marker must not exist until its complete
+        # payload has been fsynced; opening the temporary file is not proof.
+        with tempfile.NamedTemporaryFile(
+            mode='w', encoding='utf-8', dir=effect.parent,
+            prefix=effect.name + '.', suffix='.pending', delete=False,
+        ) as physical:
+            # The parent deliberately pauses the provider between opening and
+            # writing, reproducing the scheduler window from F3.
+            with open(sys.argv[5], 'w', encoding='utf-8') as staged:
+                staged.write('ready')
+                staged.flush()
+                os.fsync(staged.fileno())
+            while not os.path.exists(sys.argv[6]):
+                await asyncio.sleep(0.01)
             physical.write(json.dumps({'attempt':attempt.key,
                 'forum':forum.external_channel_id}) + '\\n')
             physical.flush()
             os.fsync(physical.fileno())
+        os.replace(physical.name, effect)
         await asyncio.Event().wait()  # Provider accepted Create; acknowledgement withheld.
 
 db=Database(sys.argv[1]); forum=ChannelRef('discord-primary', sys.argv[2], 'forum', '1')
@@ -256,18 +274,33 @@ sys.exit(91)  # Unreachable unless the controlled provider returned an ACK.
 """
         child = subprocess.Popen(
             [sys.executable, '-c', child_script, db_path, '300',
-             str(self.canonical_id), str(side_effect)],
+             str(self.canonical_id), str(side_effect), str(prepublish), str(release)],
             cwd=root, env={**os.environ, 'PYTHONPATH': str(root)},
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         try:
             deadline = time.monotonic() + 15
-            # The fsynced side-effect file is the acceptance barrier; a poll
-            # alone would not prove that the remote provider committed Create.
+            # The provider is deliberately suspended after opening a temporary
+            # effect file. The final acceptance marker must still be absent.
+            while time.monotonic() < deadline:
+                self.assertIsNone(child.poll(), 'provider exited before reaching publication')
+                if prepublish.exists() and prepublish.read_text(encoding='utf-8') == 'ready':
+                    break
+                time.sleep(0.01)
+            self.assertTrue(prepublish.exists(), 'provider never reached prepublication barrier')
+            self.assertEqual(prepublish.read_text(encoding='utf-8'), 'ready')
+            self.assertIsNone(child.poll(), 'provider exited before physical Create')
+            self.assertFalse(side_effect.exists(), 'an incomplete physical record was published')
+            release.write_text('go', encoding='utf-8')
+            # Only a complete, atomically published record may trigger SIGKILL.
             while not side_effect.exists() and time.monotonic() < deadline:
                 self.assertIsNone(child.poll(), 'provider exited before accepting Create')
                 time.sleep(0.01)
-            self.assertTrue(side_effect.exists(), 'provider never reached Create barrier')
+            self.assertTrue(side_effect.exists(), 'provider never published Create')
+            accepted_before_kill = [json.loads(line) for line in side_effect.read_text().splitlines()]
+            self.assertEqual(len(accepted_before_kill), 1)
+            self.assertEqual(accepted_before_kill[0]['forum'], '300')
+            self.assertEqual(list(side_effect.parent.glob(side_effect.name + '.*.pending')), [])
             self.assertIsNone(child.poll(), 'the provider should still be awaiting ACK')
             # Kill *from another process* during the unresolved SDK call.
             child.kill()
@@ -277,6 +310,8 @@ sys.exit(91)  # Unreachable unless the controlled provider returned an ACK.
             if child.poll() is None:
                 child.kill()
                 child.communicate(timeout=10)
+            prepublish.unlink(missing_ok=True)
+            release.unlink(missing_ok=True)
         accepted = [json.loads(line) for line in side_effect.read_text().splitlines()]
         self.assertEqual(len(accepted), 1)
         self.assertEqual(accepted[0]['forum'], '300')
