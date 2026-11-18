@@ -2,6 +2,19 @@
 
 This document is a short, feature-oriented index of the test suite. It helps maintainers find existing coverage before adding a new test. It intentionally links to files rather than line numbers or individual test functions, because those change more often.
 
+## Discord scoped published-source replay
+
+- `tests/test_discord_bot_exact_source_dispatch.py` exercises the production
+  `BridgeBot.on_thread_create` / `on_message` callback guards against real
+  SQLite-persisted typed Community and Personal Feed sources, including the same
+  numeric message ID under different containers. It checks replay admission,
+  source isolation, and typed/legacy Personal Feed discussion adoption.
+- `tests/behavior/test_personal_feed_runtime_paths.py` continues to protect
+  older Personal Feed roots, durable reply dedup and conversation ownership.
+  The repository lookup only accepts legacy roots with an exact Discord
+  channel/message projection; generic ID-only publication lookup stays unsafe
+  for typed sources and is not used by these Gateway paths.
+
 ## Duplicate Community Create entry audit
 
 - `docs/development/community_create_legacy_entry_audit.md` inventories the

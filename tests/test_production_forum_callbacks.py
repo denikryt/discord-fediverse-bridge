@@ -56,7 +56,7 @@ def setup_world(*, forum=True, allow=True):
         _require_discord_adapter=lambda: FakeAdapter(),
         database=SimpleNamespace(
             activitypub_objects=SimpleNamespace(
-                get_published_activity_object_by_discord_message_id=lambda _id: None,
+                get_personal_feed_root_by_discord_source=lambda _ref: None,
             ),
             discord_fanout_groups=SimpleNamespace(
                 get_thread_delivery_by_thread=lambda _id: None,

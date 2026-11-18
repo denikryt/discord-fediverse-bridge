@@ -1,3 +1,22 @@
+## Discord published-source replay D1 — fixed locally (2026-11-18)
+
+- The real Discord `on_thread_create` replay and subsequent human `on_message`
+  previously queried `PublishedActivityObject` by an unscoped Discord message
+  ID. Typed canonical sources correctly reject that ambiguous lookup.
+- Both Gateway paths and Personal Feed discussion adoption now select only a
+  Personal Feed root matching the exact Discord connector, parent text channel
+  and root message. Community starters in other physical containers cannot
+  claim Personal Feed ownership, even when message IDs coincide.
+- `DISCORD_PERSONAL_FEED_LEGACY_SOURCE_TEMP` allows previously persisted Personal
+  Feed roots without a typed source container to resolve by their **matching**
+  Discord channel/message projections. It may be removed after an explicit
+  migration backfills every affected root with its verified source container.
+- Four SQLite + production BridgeBot callback regressions and 28 targeted
+  local tests passed with a minimal Discord SDK import shim. The complete
+  Discord SDK/restart/OAuth replay and full dependency-backed suite require
+  external verification; the 2026-11-18 full report's P1/P2 test suggestions
+  are not claimed as implemented by this fix.
+
 ## Fluxer-only simplicity review (2026-11-17)
 
 - Forum Create uses one fresh Python capability/tag snapshot per preflight;

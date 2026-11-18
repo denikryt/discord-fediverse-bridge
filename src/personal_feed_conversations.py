@@ -15,7 +15,7 @@ from .content_sync.persistence import (
 from .fedify_gateway_client import RenderPersonalFeedRequest
 from .platform_types import (
     ThreadCreated, MessageCreated, PlatformOperationError, CreateAttempt,
-    ContentDocument, DeliveryPresentation, validate_message_reply,
+    ContentDocument, DeliveryPresentation, MessageRef, validate_message_reply,
 )
 from .discord_legacy_projection import discord_id_to_legacy_int
 from .activitypub_identity_urls import (
@@ -90,8 +90,11 @@ class PersonalFeedConversationRuntime:
         self, *, thread_id: int, parent_id: int,
     ) -> PersonalFeedConversationResult:
         """Verify persisted canonical root and matching parent before adoption."""
-        root = self.database.activitypub_objects.get_published_activity_object_by_discord_message_id(
-            thread_id
+        # The discussion thread shares its ID with the root message, but the
+        # authored Note belongs to the parent text channel. Do not resolve a
+        # community starter with the same ID or query a typed source by ID alone.
+        root = self.database.activitypub_objects.get_personal_feed_root_by_discord_source(
+            MessageRef('discord-primary', str(parent_id), str(thread_id))
         )
         if root is None or root.publication_context != "personal_feed":
             return PersonalFeedConversationResult(
