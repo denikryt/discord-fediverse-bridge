@@ -146,7 +146,8 @@ function buildUpdateActivity(
       source,
       content: htmlContent,
       updated,
-      ...(request.kind === "post" ? { name: request.title ?? "Untitled Discord Post" } : {}),
+      ...(request.kind === "post" && (!personalFeed || request.title != null)
+        ? { name: request.title ?? "Untitled Discord Post" } : {}),
     };
     if (request.inReplyToObjectId) {
       noteParams.replyTarget = new URL(request.inReplyToObjectId);
