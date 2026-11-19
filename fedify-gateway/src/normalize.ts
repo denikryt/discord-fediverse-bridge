@@ -1171,12 +1171,25 @@ function parseLemmyNumericIdOrZero(apId: string, kind: "post" | "comment"): numb
 export function resolveCommunityActorIdForDelete(
   activity: Record<string, unknown>,
 ): string | null {
-  // audience is present on the Delete record itself in Lemmy 0.19 (confirmed from real logs).
-  // Fall back to the first community actor id found in cc or to.
-  const candidates = [
-    ...normalizeStringArray(activity.audience),
-    ...normalizeStringArray(activity.cc),
-    ...normalizeStringArray(activity.to),
-  ];
-  return candidates.find((c) => isCommunityActorId(c)) ?? null;
+  /** The signed ActivityStreams addressing may use strings or { id } IRI nodes.
+   * Keep this extraction local to Delete rather than broadening Community
+   * identity resolution for unrelated Create, Follow or direct Person paths.
+   */
+  const iries = [activity.audience, activity.cc, activity.to].flatMap((value) => {
+    const values = Array.isArray(value) ? value : [value];
+    return values.flatMap((item) => {
+      const id = asString(item) ?? asString(asRecord(item)?.id);
+      return id == null ? [] : [id];
+    });
+  });
+  for (const iri of iries) {
+    // Malformed recipients cannot be interpreted as Group identity and must
+    // not abort otherwise authenticated processing with a URI parser error.
+    try {
+      if (isCommunityActorId(iri)) return iri;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
