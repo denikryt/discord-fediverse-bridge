@@ -127,7 +127,7 @@ def register(
         await interaction.edit_original_response(content=status)
 
     @group.command(name='add-channel', description='Add a destination for your existing Follow')
-    @app_commands.describe(actor='Canonical remote Actor URL from /person-feed list')
+    @app_commands.describe(actor='Fediverse handle or canonical Actor URL')
     async def add_channel(interaction: discord.Interaction, actor: str, channel: discord.TextChannel) -> None:
         """Share a text channel while isolating local users' Follow ownership."""
         if not await allowed(interaction):
@@ -136,8 +136,15 @@ def register(
         if flags is None:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
+        canonical = await follow_service.canonical_owned_actor(
+            discord_user_id=str(interaction.user.id), identifier=actor,
+            require_admission_policy=True,
+        )
+        if canonical is None:
+            await interaction.edit_original_response(content='No active permitted Follow for that Actor.')
+            return
         result = await _run_owned_sync_mutation(lambda: channel_service.add_channel(
-            discord_user_id=str(interaction.user.id), remote_actor_id=actor,
+            discord_user_id=str(interaction.user.id), remote_actor_id=canonical,
             discord_guild_id=interaction.guild_id, discord_channel_id=channel.id,
             target_channel_guild_id=channel.guild.id, channel_type='text',
             caller_can_manage_guild=True, bot_permissions=flags,
@@ -152,7 +159,7 @@ def register(
         }.get(result.status, f'Assignment not changed: {result.status}.'))
 
     @group.command(name='remove-channel', description='Remove one of your own destinations')
-    @app_commands.describe(actor='Canonical remote Actor URL from /person-feed list')
+    @app_commands.describe(actor='Fediverse handle or canonical Actor URL')
     async def remove_channel(interaction: discord.Interaction, actor: str, channel: discord.TextChannel) -> None:
         """Remove only the caller's channel association, never another owner's."""
         if not await allowed(interaction):
@@ -161,8 +168,13 @@ def register(
             await interaction.response.send_message('Choose a channel from this server.', ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
+        canonical = await follow_service.canonical_owned_actor(
+            discord_user_id=str(interaction.user.id), identifier=actor)
+        if canonical is None:
+            await interaction.edit_original_response(content='You do not have that destination.')
+            return
         result = await _run_owned_sync_mutation(lambda: channel_service.remove_channel(
-            discord_user_id=str(interaction.user.id), remote_actor_id=actor,
+            discord_user_id=str(interaction.user.id), remote_actor_id=canonical,
             discord_guild_id=interaction.guild_id, discord_channel_id=channel.id,
         ))
         if result.status == 'removed':
@@ -176,14 +188,19 @@ def register(
         }.get(result.status, f'Destination not removed: {result.status}.'))
 
     @group.command(name='unfollow', description='Remove all your destinations for a remote Person')
-    @app_commands.describe(actor='Canonical remote Actor URL from /person-feed list')
+    @app_commands.describe(actor='Fediverse handle or canonical Actor URL')
     async def unfollow(interaction: discord.Interaction, actor: str) -> None:
         """Cancel the caller's Follow without revoking any other user's generation."""
         if not await allowed(interaction):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
+        canonical = await follow_service.canonical_owned_actor(
+            discord_user_id=str(interaction.user.id), identifier=actor)
+        if canonical is None:
+            await interaction.edit_original_response(content='No active Follow for that Actor.')
+            return
         result = await _run_owned_sync_mutation(lambda: follow_service.cancel_follow(
-            discord_user_id=str(interaction.user.id), remote_actor_id=actor,
+            discord_user_id=str(interaction.user.id), remote_actor_id=canonical,
         ))
         if result == 'cancel_requested':
             try:

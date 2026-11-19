@@ -143,6 +143,51 @@ class RemotePersonFollowService:
                 current.follow_activity_id, current.id,
             )
 
+    async def canonical_owned_actor(
+        self, *, discord_user_id: str, identifier: str,
+        require_admission_policy: bool = False,
+    ) -> str | None:
+        """Resolve a command handle to one currently owned canonical Follow.
+
+        Exact stored Actor URLs are offline: removing a Follow must never
+        depend on the remote server being reachable. Handles are verified via
+        the existing Gateway resolver; neither path creates an alias or Follow.
+        """
+        text = str(identifier or '').strip()
+        if not text:
+            return None
+        if '://' in text:
+            if not _is_safe_remote_url(text, self.origin):
+                return None
+            actor_id = text
+        else:
+            host = text.rsplit('@', 1)[-1]
+            if '@' not in text or not host or not self.policy_service.federation_decision(host).allowed:
+                return None
+            try:
+                resolved = await self.gateway.resolve_remote_person(text)
+            except Exception:
+                return None
+            if (not _is_safe_remote_url(resolved.actor_id, self.origin)
+                    or not _is_safe_remote_url(resolved.inbox_url, self.origin)
+                    or not self._federation_allowed(resolved.actor_id, resolved.inbox_url)):
+                return None
+            actor_id = resolved.actor_id
+        with self.database.session() as session:
+            follow = session.scalar(select(RemotePersonFollow).join(
+                User, User.id == RemotePersonFollow.user_id,
+            ).where(
+                User.discord_user_id == str(discord_user_id),
+                RemotePersonFollow.remote_actor_id == actor_id,
+                RemotePersonFollow.relationship_status.in_(('pending', 'accepted')),
+            ).limit(1))
+            if follow is None:
+                return None
+            if require_admission_policy and not self._federation_allowed(
+                    actor_id, follow.remote_inbox_url):
+                return None
+        return actor_id
+
     def cancel_follow(self, *, discord_user_id: str, remote_actor_id: str) -> str:
         """Remove every destination of one owner and request their exact Undo.
 
