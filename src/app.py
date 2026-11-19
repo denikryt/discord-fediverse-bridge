@@ -47,6 +47,7 @@ from .personal_feeds import PersonalFeedService
 from .personal_feed_publisher import PersonalFeedPublisher
 from .personal_feed_conversations import PersonalFeedConversationRuntime
 from .personal_feed_discord_delivery_worker import PersonalFeedDiscordDeliveryWorker
+from .community_sync.group_view_delivery import CommunityGroupViewDeliveryWorker
 from .user_bans import UserBanService
 from .db.backup import recover_incomplete_restore
 
@@ -257,6 +258,10 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             )
         )
         bot.bind_remote_person_root_worker(remote_person_root_delivery_worker)
+        community_group_view_delivery_worker = CommunityGroupViewDeliveryWorker(
+            database=database, bot=bot, policy_service=bridge_policy_service,
+        )
+        bot.bind_community_group_view_worker(community_group_view_delivery_worker)
         event_router.bind_remote_person_conversations(RemotePersonConversationRuntime(
             database=database, fedify_gateway=fedify_gateway,
             policy_service=bridge_policy_service, user_ban_service=user_ban_service,
@@ -311,6 +316,7 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             personal_feed_conversation_runtime=personal_feed_conversation_runtime,
             personal_feed_discord_delivery_worker=personal_feed_discord_delivery_worker,
             deployment_state_lease=deployment_lease,
+            community_group_view_delivery_worker=community_group_view_delivery_worker,
         )
         _validate_runtime_graph(runtime)
         return runtime
@@ -333,6 +339,7 @@ def _validate_runtime_graph(runtime: Runtime) -> None:
     runtime.bot._require_message_mutation_handler()
     runtime.bot._require_personal_feed_delivery_worker()
     runtime.bot._require_remote_person_root_worker()
+    runtime.bot._require_community_group_view_worker()
     if runtime.community_runtime.discord_fanout is None:
         raise RuntimeError("CommunityRuntime Discord fanout is not configured")
     if runtime.community_runtime.bot is None:

@@ -77,6 +77,7 @@ class BridgeBot(discord.Client):
         self._message_mutation_handler: DiscordMessageMutationHandler | None = None
         self._personal_feed_delivery_worker: object | None = None
         self._remote_person_root_worker: object | None = None
+        self._community_group_view_worker: object | None = None
 
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
@@ -166,6 +167,7 @@ class BridgeBot(discord.Client):
         # normal connection establishment rather than actual delivery failures.
         self._require_personal_feed_delivery_worker().start()
         self._require_remote_person_root_worker().start()
+        self._require_community_group_view_worker().start()
         # Refresh last-known Discord labels at startup so old rows and renamed
         # guilds/forums converge without live lookups during dashboard requests.
         refresh_discord_directory_from_bot(self.database, self)
@@ -343,6 +345,18 @@ class BridgeBot(discord.Client):
         if self._remote_person_root_worker is None:
             raise RuntimeError("Remote Person root worker is not configured")
         return self._remote_person_root_worker
+
+    def bind_community_group_view_worker(self, worker: object) -> None:
+        """Bind the one Group-view reconciliation owner before Discord connects."""
+        if self._community_group_view_worker is not None:
+            raise RuntimeError('Community Group-view worker is already configured')
+        self._community_group_view_worker = worker
+
+    def _require_community_group_view_worker(self) -> object:
+        """Fail startup if Group mutation receipts have no Discord retry owner."""
+        if self._community_group_view_worker is None:
+            raise RuntimeError('Community Group-view worker is not configured')
+        return self._community_group_view_worker
 
     async def fetch_message_state(
         self, channel_id: int, message_id: int

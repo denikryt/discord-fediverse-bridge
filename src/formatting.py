@@ -241,6 +241,32 @@ def feed_comment_content(*, actor_name: str, actor_id: str,
     return render_feed_discord_message(header=header, body=body)
 
 
+def render_remote_community_root(*, actor_name: str, actor_id: str,
+                                 object_id: str, title: str | None,
+                                 body: str | None, external_url: str | None) -> str:
+    """Render one bot-owned remote Community starter for both Create and Edit.
+
+    Preserve the canonical Note ID as the complete final line, independently
+    of whether a link post has another source URL in its mutable body.
+    """
+    identity = validate_feed_object_url(object_id)
+    author = feed_author_header(actor_name, actor_id)
+    text = normalize_text(body)
+    if external_url and external_url != identity:
+        text = f'{text}\n\n{external_url}' if text else external_url
+    return render_feed_discord_message(
+        header=f'**{title or "Untitled Lemmy Post"}**\nAuthor: {author}',
+        body=text, footer=identity,
+    )
+
+
+def render_remote_community_comment(*, actor_name: str, actor_id: str,
+                                    object_id: str, body: str | None) -> str:
+    """Render the exact bot-only first-paragraph identity for Create and Edit."""
+    return feed_comment_content(actor_name=actor_name, actor_id=actor_id,
+                                object_id=object_id, body=normalize_text(body))
+
+
 def has_feed_comment_identity(content: str, object_id: str) -> bool:
     """Match the exact, bridge-authored first-paragraph identity marker only.
 

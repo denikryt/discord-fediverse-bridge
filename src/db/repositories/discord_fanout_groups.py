@@ -485,6 +485,8 @@ class DiscordFanoutGroupRepository(BaseRepository):
             # The source revision reserved before REST is the maximum proven
             # on this Discord copy. A concurrent mutation remains outstanding.
             claim.applied_revision = claim.reserved_view_revision
+            claim.mutation_attempt_token = None
+            claim.next_attempt_at = None
 
     def mark_remote_target(
         self, *, kind: str, group_id: int, discord_channel_id: int,
@@ -503,7 +505,8 @@ class DiscordFanoutGroupRepository(BaseRepository):
         column = CommunityDiscordTargetClaim.thread_group_id if kind == "post" else CommunityDiscordTargetClaim.message_group_id
         claim = session.scalar(select(CommunityDiscordTargetClaim).where(
             column == group_id, CommunityDiscordTargetClaim.discord_channel_id == channel_id,
-            CommunityDiscordTargetClaim.kind == kind, CommunityDiscordTargetClaim.status == "claimed",
+            CommunityDiscordTargetClaim.kind == kind,
+            CommunityDiscordTargetClaim.status.in_(("claimed", "unknown")),
             CommunityDiscordTargetClaim.attempt_id == attempt_id,
         ))
         if claim is None:

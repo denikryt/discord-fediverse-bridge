@@ -55,11 +55,14 @@ class Runtime:
     personal_feed_conversation_runtime: PersonalFeedConversationRuntime
     personal_feed_discord_delivery_worker: PersonalFeedDiscordDeliveryWorker
     deployment_state_lease: FileLock
+    community_group_view_delivery_worker: object | None = None
 
     async def close(self) -> None:
         """Close live-state owners before releasing the deployment generation lease."""
         # The ordering prevents restore from replacing DB/media paths while a
         # client, pooled connection, or HTTP reader can still use them.
+        if self.community_group_view_delivery_worker is not None:
+            await self.community_group_view_delivery_worker.stop()
         await self.remote_person_root_delivery_worker.stop()
         await self.personal_feed_discord_delivery_worker.stop()
         await self.user_actor_delivery_worker.stop()

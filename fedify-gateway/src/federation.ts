@@ -354,6 +354,9 @@ export function createGatewayFederation(
           event.source_activity_json = updateRecord;
           event.source_activity_id = asString(updateRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
+          // The outer Group was authenticated by Fedify; the nested Person
+          // actor was not. Python grants only a Group-local display mutation.
+          event.verified_sender_actor_id = asActivityIri(announceEnvelope.rawRecord.actor);
           // One wire Announce is one receipt, regardless of the nested Create,
           // Update, or Delete id. Keep that inner id only as provenance.
           event.delivery_id = announceEnvelope.announceId;
@@ -382,6 +385,7 @@ export function createGatewayFederation(
           event.source_activity_json = deleteRecord;
           event.source_activity_id = asString(deleteRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
+          event.verified_sender_actor_id = asActivityIri(announceEnvelope.rawRecord.actor);
           // One wire Announce is one receipt, regardless of the nested Create,
           // Update, or Delete id. Keep that inner id only as provenance.
           event.delivery_id = announceEnvelope.announceId;
@@ -497,6 +501,12 @@ async function deliverVerifiedLocalContentEvent(
     return;
   }
   if (selected.kind === "remote") {
+    // A direct Fedify listener authenticated the outer author; do not infer
+    // Person signatures from an Announce's nested actor. Wrapped mutation
+    // callers carry their verified Group sender explicitly instead.
+    if (event.source_announce_id == null) {
+      event.verified_sender_actor_id = asActivityIri(signedActivityJson.actor);
+    }
     await deliverNormalizedEvent(config, event, logContext);
     return;
   }
