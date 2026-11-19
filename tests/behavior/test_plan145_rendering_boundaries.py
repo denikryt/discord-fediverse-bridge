@@ -10,7 +10,7 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from src.remote_person_webhooks import remote_root_content, RemotePersonWebhookTransport
+from src.remote_person_webhooks import remote_root_content, RemotePersonWebhookTransport, _handle
 from src.formatting import feed_comment_content
 
 ACTOR = 'https://remote.example/users/bob'
@@ -28,15 +28,17 @@ def post(*, body: str = 'A public post', object_id: str = NOTE,
 
 
 class FeedRootRenderingContracts(unittest.TestCase):
-    """Enforce fixed attribution/footer, length and link atomicity."""
+    """Enforce webhook-owned attribution, source footer and link atomicity."""
 
-    def test_header_and_source_footer_survive_root_reedits(self) -> None:
-        """Create and Edit must rebuild the same immutable attribution/footer."""
+    def test_source_footer_survives_root_reedits_without_author_header(self) -> None:
+        """Create and Edit rebuild one footer without repeating webhook identity."""
         root = post(body='First', warning='Spoiler')
         first = remote_root_content(root)
         edited = remote_root_content(post(body='Second', warning='Spoiler'))
-        self.assertTrue(first.startswith('`bob@remote.example`\n\n'))
-        self.assertTrue(edited.startswith('`bob@remote.example`\n\n'))
+        self.assertTrue(first.startswith('Content warning: Spoiler\n\nFirst'))
+        self.assertTrue(edited.startswith('Content warning: Spoiler\n\nSecond'))
+        self.assertNotIn('`bob@remote.example`', first)
+        self.assertNotIn('`bob@remote.example`', edited)
         self.assertEqual(first.splitlines()[-1], NOTE)
         self.assertEqual(edited.splitlines()[-1], NOTE)
         self.assertEqual(edited.count(NOTE), 1)
@@ -84,7 +86,8 @@ class FeedRootRenderingContracts(unittest.TestCase):
         root = post()
         root.remote_handle = 'Alice @ Work'
         rendered = remote_root_content(root)
-        self.assertTrue(rendered.startswith('`Alice @ Work@remote.example`\n\n'))
+        self.assertEqual(_handle(root), 'Alice @ Work@remote.example')
+        self.assertEqual(rendered, f'A public post\n\n{NOTE}')
 
     def test_whitespace_cut_must_not_split_markdown_atom(self) -> None:
         """A late whitespace adjustment cannot cut a protected Markdown label."""

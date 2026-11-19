@@ -179,28 +179,29 @@ def _prefix_for_budget(value: str, units: int) -> int:
 
 def render_feed_discord_message(*, header: str, body: str,
                                 footer: str | None = None) -> str:
-    """Bound one bridge-owned feed message without breaking protected links.
+    """Reserve immutable identity while truncating only optional feed text.
 
-    Mandatory author/identity layout is reserved first. If a URL or supported
-    Markdown link crosses the body cutoff, drop the whole fragment and tail;
-    never emit a partial Discord reconciliation key.
+    Webhook roots already identify their author through the sender and carry
+    only a canonical source footer. Bot comments retain the author header and
+    marker; no other layout may have an empty header and empty footer.
     """
-    if not header.strip():
-        raise ValueError('feed author header must not be empty')
-    suffix = f'\n\n{footer}' if footer else ''
-    head = header.strip()
-    mandatory = head + suffix
+    head = str(header or '').strip()
+    if not head and not footer:
+        raise ValueError('feed message requires author header or source footer')
+    mandatory = (head + '\n\n' + footer) if head and footer else (head or footer or '')
     if _utf16_units(mandatory) > DISCORD_MESSAGE_LIMIT:
         raise ValueError('mandatory feed author/identity exceeds Discord limit')
     clean_body = str(body or '').strip()
     if not clean_body:
         return mandatory
-    formatted = head + '\n\n' + clean_body + suffix
+    prefix = (head + '\n\n') if head else ''
+    suffix = ('\n\n' + footer) if footer else ''
+    formatted = prefix + clean_body + suffix
     if _utf16_units(formatted) <= DISCORD_MESSAGE_LIMIT:
         return formatted
     # Reserve both separators, the source footer and an ellipsis before the
     # body. A zero-budget body is omitted without truncating the footer.
-    budget = DISCORD_MESSAGE_LIMIT - _utf16_units(head + '\n\n' + suffix)
+    budget = DISCORD_MESSAGE_LIMIT - _utf16_units(prefix + suffix)
     if budget <= 0:
         return mandatory
     cut = _prefix_for_budget(clean_body, max(0, budget - 1))
@@ -209,20 +210,16 @@ def render_feed_discord_message(*, header: str, body: str,
         if start < cut < end:
             cut = start
             break
-    # Prefer a nearby word boundary, but never force a complete long word to
-    # disappear when a safe character-prefix suffices.
     whitespace = max(clean_body.rfind(' ', 0, cut), clean_body.rfind('\n', 0, cut))
     if whitespace > 0 and cut - whitespace < 32:
         cut = whitespace
-    # A word-boundary adjustment can move back *into* a Markdown label.
-    # Revalidate the final cut against the same complete protected atoms.
     for start, end in protected:
         if start < cut < end:
             cut = start
             break
-    prefix = clean_body[:cut].rstrip()
-    short_body = (prefix + '…') if prefix else '…'
-    result = head + '\n\n' + short_body + suffix
+    trimmed = clean_body[:cut].rstrip()
+    short_body = (trimmed + '…') if trimmed else '…'
+    result = prefix + short_body + suffix
     if _utf16_units(result) > DISCORD_MESSAGE_LIMIT:
         raise ValueError('feed message exceeds Discord length after truncation')
     return result

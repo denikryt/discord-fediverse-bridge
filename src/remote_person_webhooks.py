@@ -12,8 +12,7 @@ from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 from .remote_person_feeds import REQUIRED_BOT_PERMISSIONS
-from .formatting import (feed_author_header, render_feed_discord_message,
-                         validate_feed_object_url)
+from .formatting import render_feed_discord_message, validate_feed_object_url
 
 
 class RemoteWebhookUnavailable(RuntimeError):
@@ -93,7 +92,7 @@ def _attachment_urls(source: object) -> list[str]:
 
 
 def remote_root_content(post: object) -> str:
-    """Render bridge-owned webhook root with fixed author and source identity."""
+    """Render a webhook-owned root without repeating its sender identity in text."""
     try:
         source = json.loads(post.source_activity_json)
     except (TypeError, ValueError):
@@ -108,12 +107,9 @@ def remote_root_content(post: object) -> str:
     if body:
         lines.append(body)
     lines.extend(_attachment_urls(source))
-    # The shared community formatter adds the domain; keep embedded @ in
-    # actor-level display names and strip only a preformatted host suffix.
-    header = feed_author_header(_person_name(post), post.remote_actor_id)
     footer = validate_feed_object_url(str(post.object_id))
     return render_feed_discord_message(
-        header=header, body='\n\n'.join(lines), footer=footer,
+        header='', body='\n\n'.join(lines), footer=footer,
     )
 
 
