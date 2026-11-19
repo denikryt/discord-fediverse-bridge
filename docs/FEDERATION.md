@@ -54,6 +54,18 @@ registered Person author. For locally hosted communities, a remote bridge's
 accepted Service may authorise its own registered Person actors; content
 updates and deletes still require the original owner.
 
+For already mapped remote Community content, an authenticated Group-distributed
+`Announce(Update/Delete)` may update **only that Group's Discord-facing view**.
+It does not acquire the original Person's authorship or delete the original
+Person Note. A first-Create provenance snapshot remains immutable; the current
+Group view and terminal Group tombstone are stored on the canonical mapping.
+A processed inbound mutation receipt confirms that SQLite committed a new
+revision, **not** that every Discord destination is up to date. Each target
+retains an applied revision and retry state. New bot-created Community
+roots/comments carry exact identity markers for proof-based reconciliation
+of lost Discord POST acknowledgements; an unproven legacy `unknown` is never
+blindly re-POSTed.
+
 ## Interoperability
 
 - **Lemmy and threadiverse:** remote communities are `Group` actors; posts
@@ -68,7 +80,9 @@ updates and deletes still require the original owner.
   publish Personal Feed Notes. Each local Person can Follow a remote Person
   and route newly received public Notes into one or more Discord text channels.
   The received remote Note's root is shown with the original handle/avatar via
-  a bot-owned Incoming webhook; comments use bot messages and native Replies.
+  a bot-owned Incoming webhook without duplicating the author in the root
+  body. The complete canonical source URL remains the root's last line; bot
+  comments use a fixed identity marker and native Replies.
   Signed replies from registered Discord users use the same canonical Person
   identity, stable `inReplyTo`, and original explicit direct-recipient actor IDs
   in the ActivityStreams audience. This is not full Mastodon compatibility.

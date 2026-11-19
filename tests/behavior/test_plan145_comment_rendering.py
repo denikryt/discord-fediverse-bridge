@@ -97,7 +97,8 @@ class CommentRenderingContracts(unittest.TestCase):
             object_id=URL, body='x' * 1940 + ' https://ref.example/very-long-url and tail')
         self.assertEqual(before.split('\n\n')[0], after.split('\n\n')[0])
         self.assertLessEqual(len(after.encode('utf-16-le')) // 2, 2000)
-        self.assertNotIn('https://ref.example/very-', after)
+        # Plan 146 retains a complete fitting crossing link instead of dropping it.
+        self.assertIn('https://ref.example/very-long-url', after)
         self.assertEqual(after.count('[↗](<'), 1)
 
     def test_reconcile_rejects_body_quotes_prefix_sender_and_nonunique_matches(self):
