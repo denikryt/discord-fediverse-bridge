@@ -115,6 +115,8 @@ export interface LocalFollowRequestedObject {
   follow_activity_id: string;
   remote_inbox_url: string;
   remote_shared_inbox_url: string | null;
+  /** Optional label from the same dereferenced and ID-matched Actor profile. */
+  remote_actor_display_name?: string | null;
 }
 
 export interface LocalFollowRequestedEvent {

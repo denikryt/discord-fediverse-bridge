@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from urllib.parse import urlparse
 
 from .inbound_activity_outcomes import InboundActivityOutcome
@@ -34,6 +35,7 @@ class UserActorFollowService:
         remote_inbox_url: str,
         remote_shared_inbox_url: str | None,
         follow_activity_id: str,
+        remote_actor_display_name: str | None = None,
     ) -> object:
         """Persist one accepted relationship and send an idempotent signed Accept."""
         from .activitypub_handlers import HandlerResult
@@ -108,7 +110,10 @@ class UserActorFollowService:
             transition.relationship_id
         )
         if claimed is not None:
-            await self._notify_owner(user=user, remote_actor_id=remote_actor_id)
+            await self._notify_owner(
+                user=user, remote_actor_id=remote_actor_id,
+                remote_actor_display_name=remote_actor_display_name,
+            )
         return HandlerResult(
             "processed",
             InboundActivityOutcome.APPLIED,
@@ -147,11 +152,12 @@ class UserActorFollowService:
             "processed", InboundActivityOutcome.APPLIED, "user actor follower removed"
         )
 
-    async def _notify_owner(self, *, user: object, remote_actor_id: str) -> None:
+    async def _notify_owner(self, *, user: object, remote_actor_id: str,
+                            remote_actor_display_name: str | None = None) -> None:
         """Attempt one non-retryable DM after the matching Accept succeeds."""
         try:
             discord_user = await self.bot.fetch_user(int(user.discord_user_id))
-            remote_label = self._remote_label(remote_actor_id)
+            remote_label = self._remote_label(remote_actor_id, remote_actor_display_name)
             local_host = urlparse(user.actor_url).netloc
             await discord_user.send(
                 f"{remote_label} followed your Fediverse account "
@@ -167,8 +173,18 @@ class UserActorFollowService:
             )
 
     @staticmethod
-    def _remote_label(actor_id: str) -> str:
-        """Build a bounded human-readable label without fetching remote profile data."""
+    def _remote_label(actor_id: str, display_name: str | None = None) -> str:
+        """Render bounded, mention-safe Actor-level display with URI fallback.
+
+        Presentation text is never treated as an ActivityPub identity or a
+        federated signer. Do not allow Markdown control characters or Discord
+        everyone/here mentions from an untrusted remote Actor display field.
+        """
         parsed = urlparse(actor_id)
-        name = parsed.path.rstrip("/").split("/")[-1]
-        return f"@{name}@{parsed.netloc}" if parsed.netloc and name else actor_id
+        fallback = parsed.path.rstrip('/').split('/')[-1]
+        candidate = re.sub(r'[^\w .-]', '', str(display_name or '')).strip()[:64]
+        if not candidate or candidate.lower().startswith(('everyone', 'here')):
+            candidate = fallback
+        if not parsed.hostname or not candidate:
+            return actor_id
+        return f'@{candidate}@{parsed.hostname}'

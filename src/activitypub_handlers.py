@@ -196,6 +196,7 @@ async def dispatch_activitypub_event(
                 remote_inbox_url=event.object.remote_inbox_url,
                 remote_shared_inbox_url=event.object.remote_shared_inbox_url,
                 follow_activity_id=event.object.follow_activity_id,
+                remote_actor_display_name=event.object.remote_actor_display_name,
             )
         return await runtime.local_community_runtime.handle_follow_request(
             local_community_actor_id=event.target_actor_id,

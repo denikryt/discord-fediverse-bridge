@@ -195,6 +195,7 @@ class LocalFollowRequestObject(BaseModel):
     follow_activity_id: str
     remote_inbox_url: str
     remote_shared_inbox_url: str | None = None
+    remote_actor_display_name: str | None = None
 
 
 class LocalFollowRequestEvent(BaseModel):
