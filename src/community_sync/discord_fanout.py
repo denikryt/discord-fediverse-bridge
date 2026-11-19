@@ -301,6 +301,35 @@ class DiscordFanout:
                 )
         return results
 
+    async def propagate_thread_starter_edit(
+        self, *, mirror_deliveries: list[CommunityThreadGroupDelivery],
+        new_content: str, fallback_author: str,
+    ) -> None:
+        """Edit retained bot-owned mirror starters, leaving the native source intact.
+
+        The saved mirror header remains the local attribution authority. A
+        failed destination does not suppress the already durable AP Update or
+        successful siblings; only successful edits register echo suppression.
+        """
+        from ..formatting import apply_edit_to_discord_message
+
+        async def _edit_one(delivery: CommunityThreadGroupDelivery) -> None:
+            if delivery.role != 'mirror' or not self._channel_is_allowed(delivery.discord_channel_id):
+                return
+            try:
+                thread = await self.bot.get_thread_by_id(delivery.discord_thread_id)
+                message = await thread.fetch_message(delivery.discord_starter_message_id)
+                edited = apply_edit_to_discord_message(
+                    message.content, new_content, fallback_header=fallback_author,
+                )
+                await message.edit(content=edited)
+                self.mutation_tracker.track_message_edit(delivery.discord_starter_message_id)
+            except Exception:
+                logger.exception('Failed Community mirror starter edit %s',
+                                 delivery.discord_starter_message_id)
+
+        await asyncio.gather(*[_edit_one(d) for d in mirror_deliveries])
+
     async def propagate_edit(
         self,
         *,

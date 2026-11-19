@@ -569,6 +569,70 @@ class CommunityRuntime:
             fedify_gateway=getattr(runtime, "fedify_gateway", None),
         )
 
+    async def _handle_discord_source_starter_edit(
+        self, *, message_id: int, new_content: str,
+        edited_timestamp: object, mutation_context: DiscordMutationContext,
+    ) -> bool:
+        """Submit one native Community starter revision using its saved author.
+
+        Return True when a real source starter was classified, including
+        rejected edits. Never fall through to the reply publisher after a
+        rejected starter; that could create a second canonical Note.
+        """
+        repository = self.database.discord_fanout_groups
+        source = repository.get_source_starter_delivery_by_message(message_id)
+        if source is None:
+            return False
+        group = repository.get_thread_group_by_id(source.thread_group_id)
+        if (group is None or edited_timestamp is None or not group.ap_object_id
+                or not group.ap_activity_id or group.source_channel_id != source.discord_channel_id
+                or group.source_thread_id != source.discord_thread_id):
+            return True
+        subscription = self.database.remote_subscriptions.get_subscription_by_channel(
+            group.source_channel_id
+        )
+        if (subscription is None or subscription.status != 'accepted'
+                or subscription.lemmy_community_actor_id != group.community_actor_id
+                or not mutation_context.bridge_policy_service.federation_decision(
+                    group.community_actor_id).allowed):
+            return True
+        published = self.database.activitypub_objects.get_published_activity_object_by_object_id(
+            group.ap_object_id
+        )
+        mapping = self.database.message_mappings.get_message_mapping_by_discord_message_id(
+            message_id
+        )
+        if (published is None or published.deleted_at is not None
+                or published.kind != 'post' or published.publication_context != 'community'
+                or published.object_id != group.ap_object_id
+                or published.activity_id != group.ap_activity_id
+                or published.community_actor_url != group.community_actor_id
+                or published.discord_message_id != message_id
+                or mapping is None or mapping.object_id != published.object_id
+                or mapping.actor_url != published.actor_url):
+            return True
+        author = self.database.users.get_user_by_actor_url(published.actor_url)
+        if author is None or author.activitypub_username != published.actor_username:
+            return True
+        # The durable mutation writer orders successive edits and preserves
+        # this published object's original AP actor, title and recipients.
+        outcome = await mutation_context.user_actor_delivery_service.submit_update(
+            object_id=published.object_id, title=published.title,
+            body_markdown=new_content, edited_timestamp=edited_timestamp,
+        )
+        if outcome != 'accepted':
+            return True
+        mutation_context.user_actor_delivery_wake.wake()
+        if self.discord_fanout is not None:
+            mirrors = [d for d in repository.get_thread_deliveries(group.id)
+                       if d.role == 'mirror']
+            if mirrors:
+                await self.discord_fanout.propagate_thread_starter_edit(
+                    mirror_deliveries=mirrors, new_content=new_content,
+                    fallback_author=published.actor_username,
+                )
+        return True
+
     async def handle_discord_message_edit(
         self,
         message_id: int,
@@ -594,6 +658,12 @@ class CommunityRuntime:
         mutation_context = self._require_mutation_context(
             mutation_context=mutation_context, runtime=runtime
         )
+
+        if await self._handle_discord_source_starter_edit(
+            message_id=message_id, new_content=new_content,
+            edited_timestamp=edited_timestamp, mutation_context=mutation_context,
+        ):
+            return
 
         # Reverse-lookup the message group by the Discord message ID.
         # Covers both source and mirror deliveries via the delivery table.

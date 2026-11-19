@@ -101,7 +101,7 @@ class DiscordMessageMutationHandler:
             return
 
         delivery, is_local_message, is_personal_message = self._classify_message(
-            payload.message_id
+            payload.message_id, include_source_starter=True,
         )
         if delivery is None and not is_local_message and not is_personal_message:
             logger.debug(
@@ -119,37 +119,33 @@ class DiscordMessageMutationHandler:
             )
             return
 
-        new_content = payload.data.get("content", "")
-        logger.debug(
-            "[on_raw_message_edit] extracted content from payload: len=%d",
-            len(new_content) if new_content else 0,
-        )
-        if not new_content:
-            logger.debug(
-                "[on_raw_message_edit] no content in payload for msg=%s",
-                payload.message_id,
-            )
-            return
-
-        edited_timestamp_raw = payload.data.get("edited_timestamp")
+        # A present empty string is a real edit. Missing content in a partial
+        # Gateway event is not an empty edit; reconcile that state by GET.
+        has_content = isinstance(payload.data.get('content'), str)
+        new_content = payload.data['content'] if has_content else None
+        edited_timestamp_raw = payload.data.get('edited_timestamp')
         edited_timestamp = None
         if isinstance(edited_timestamp_raw, str):
-            edited_timestamp = datetime.fromisoformat(
-                edited_timestamp_raw.replace("Z", "+00:00")
-            )
-        if edited_timestamp is None:
+            try:
+                edited_timestamp = datetime.fromisoformat(
+                    edited_timestamp_raw.replace('Z', '+00:00')
+                )
+            except ValueError:
+                logger.warning('Invalid Discord edit timestamp for message %s', payload.message_id)
+        if edited_timestamp is None or not has_content:
             try:
                 current_message = await self._fetch_current_message(
                     channel_id=payload.channel_id,
                     message_id=payload.message_id,
                 )
-                edited_timestamp = getattr(current_message, "edited_at", None)
                 if edited_timestamp is None:
-                    return
-                new_content = getattr(current_message, "content", new_content)
+                    edited_timestamp = getattr(current_message, 'edited_at', None)
+                if not has_content:
+                    fetched_content = getattr(current_message, 'content', None)
+                    new_content = fetched_content if isinstance(fetched_content, str) else None
             except discord.HTTPException as exc:
                 logger.exception(
-                    "[on_raw_message_edit] failed to reconcile partial edit msg=%s",
+                    '[on_raw_message_edit] failed to reconcile partial edit msg=%s',
                     payload.message_id,
                 )
                 self.database.content_mutations.request_discord_reconciliation(
@@ -161,6 +157,10 @@ class DiscordMessageMutationHandler:
                 if context is not None:
                     context.user_actor_delivery_wake.wake()
                 return
+        if edited_timestamp is None or new_content is None:
+            # Without content and an edit instant the canonical revision cannot
+            # be ordered; a raw metadata-only update is never a content edit.
+            return
 
         # Author data is payload-local and used only for downstream mirror header
         # attribution. Missing names preserve the previous empty-string behavior.
@@ -259,7 +259,8 @@ class DiscordMessageMutationHandler:
                 payload.message_id,
             )
 
-    def _classify_message(self, message_id: int) -> tuple[object | None, bool, bool]:
+    def _classify_message(self, message_id: int, *,
+                          include_source_starter: bool = False) -> tuple[object | None, bool, bool]:
         """Return remote delivery and local/personal admission flags.
 
         The lookup order preserves the existing boundary contract: personal-feed
@@ -277,12 +278,18 @@ class DiscordMessageMutationHandler:
         )
         is_local_message = self.event_router.is_local_community_message(message_id)
         delivery = (
-            None
-            if is_local_message or is_personal_message
-            else self.database.discord_fanout_groups.get_message_delivery_by_message(
+            None if is_local_message or is_personal_message
+            else self.database.discord_fanout_groups.get_message_delivery_by_message(message_id)
+        )
+        if include_source_starter and delivery is None and not is_local_message and not is_personal_message:
+            # This edit-only admission must not change existing raw Delete
+            # routing: native starter/thread deletion policy is deferred.
+            # Community roots live in thread-delivery rows, not in the reply
+            # lookup above. The repository proves role='source' and the exact
+            # native starter identity before this event enters the router.
+            delivery = self.database.discord_fanout_groups.get_source_starter_delivery_by_message(
                 message_id
             )
-        )
         return delivery, is_local_message, is_personal_message
 
     async def _fetch_current_message(self, *, channel_id: int, message_id: int) -> object:

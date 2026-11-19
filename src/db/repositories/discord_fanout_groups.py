@@ -74,6 +74,27 @@ class DiscordFanoutGroupRepository(BaseRepository):
             session.flush()
             return group
 
+    def get_source_starter_delivery_by_message(
+        self, message_id: int
+    ) -> CommunityThreadGroupDelivery | None:
+        """Admit only the native source starter of a retained Community root.
+
+        A mirrored/inbound starter has the same shape of Discord ID but must
+        never authorize a local Person Update. Match both source fields and
+        the delivery role instead of assuming any thread starter is the owner.
+        """
+        with self.session() as session:
+            return session.scalar(select(CommunityThreadGroupDelivery).join(
+                CommunityThreadGroup,
+                CommunityThreadGroup.id == CommunityThreadGroupDelivery.thread_group_id,
+            ).where(
+                CommunityThreadGroupDelivery.discord_starter_message_id == message_id,
+                CommunityThreadGroupDelivery.role == 'source',
+                CommunityThreadGroup.source_starter_message_id == message_id,
+                CommunityThreadGroup.source_thread_id == CommunityThreadGroupDelivery.discord_thread_id,
+                CommunityThreadGroup.source_channel_id == CommunityThreadGroupDelivery.discord_channel_id,
+            ))
+
     def get_thread_group_by_source_thread(
         self, source_thread_id: int
     ) -> CommunityThreadGroup | None:
