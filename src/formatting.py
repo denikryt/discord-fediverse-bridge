@@ -177,6 +177,76 @@ def _prefix_for_budget(value: str, units: int) -> int:
     return len(value)
 
 
+def _fit_feed_body(body: str, budget: int) -> str:
+    """Keep whole fitting links in order, replacing omitted plain text with ellipses.
+
+    Source intervals are immutable. A retained interval either contains an
+    entire supported URL/Markdown atom, or only ordinary text; the result may
+    elide text before a link to preserve a usable link past the original cut.
+    """
+    if budget <= 0:
+        return ''
+    protected: list[tuple[int, int]] = []
+    for start, end in _feed_protected_spans(body):
+        if protected and start <= protected[-1][1]:
+            protected[-1] = (protected[-1][0], max(end, protected[-1][1]))
+        else:
+            protected.append((start, end))
+
+    def assemble(ranges: list[tuple[int, int]]) -> str:
+        """Mark precisely the holes between retained source intervals."""
+        result: list[str] = []
+        position = 0
+        for start, end in sorted(ranges):
+            if start > position:
+                result.append('…')
+            result.append(body[start:end])
+            position = end
+        if position < len(body):
+            result.append('…')
+        return ''.join(result)
+
+    retained: list[tuple[int, int]] = []
+    # Reserve the earliest complete links before consuming the optional text
+    # budget. A too-large link is omitted instead of being sliced or shortened.
+    for span in protected:
+        candidate = retained + [span]
+        if _utf16_units(assemble(candidate)) <= budget:
+            retained.append(span)
+
+    # Plain segments never contain a protected atom, including atoms omitted
+    # above. Allocate their text from left to right after reserving links.
+    plain: list[tuple[int, int]] = []
+    position = 0
+    for start, end in protected:
+        if position < start:
+            plain.append((position, start))
+        position = end
+    if position < len(body):
+        plain.append((position, len(body)))
+
+    for start, end in plain:
+        if _utf16_units(assemble(retained + [(start, end)])) <= budget:
+            retained.append((start, end))
+            continue
+        # The final partial plain segment must fit without slicing a Unicode
+        # surrogate pair. Checking actual assembly also counts new ellipses.
+        lo, hi = start, end
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if _utf16_units(assemble(retained + [(start, mid)])) <= budget:
+                lo = mid
+            else:
+                hi = mid - 1
+        if lo > start:
+            retained.append((start, lo))
+
+    result = assemble(retained)
+    if _utf16_units(result) > budget:
+        raise ValueError('feed body exceeded its reserved Discord budget')
+    return result
+
+
 def render_feed_discord_message(*, header: str, body: str,
                                 footer: str | None = None) -> str:
     """Reserve immutable identity while truncating only optional feed text.
@@ -199,27 +269,12 @@ def render_feed_discord_message(*, header: str, body: str,
     formatted = prefix + clean_body + suffix
     if _utf16_units(formatted) <= DISCORD_MESSAGE_LIMIT:
         return formatted
-    # Reserve both separators, the source footer and an ellipsis before the
-    # body. A zero-budget body is omitted without truncating the footer.
+    # Links are reserved before plain text. This admits a middle omission
+    # where a crossing link is preserved instead of discarding the whole tail.
     budget = DISCORD_MESSAGE_LIMIT - _utf16_units(prefix + suffix)
     if budget <= 0:
         return mandatory
-    cut = _prefix_for_budget(clean_body, max(0, budget - 1))
-    protected = _feed_protected_spans(clean_body)
-    for start, end in protected:
-        if start < cut < end:
-            cut = start
-            break
-    whitespace = max(clean_body.rfind(' ', 0, cut), clean_body.rfind('\n', 0, cut))
-    if whitespace > 0 and cut - whitespace < 32:
-        cut = whitespace
-    for start, end in protected:
-        if start < cut < end:
-            cut = start
-            break
-    trimmed = clean_body[:cut].rstrip()
-    short_body = (trimmed + '…') if trimmed else '…'
-    result = prefix + short_body + suffix
+    result = prefix + _fit_feed_body(clean_body, budget) + suffix
     if _utf16_units(result) > DISCORD_MESSAGE_LIMIT:
         raise ValueError('feed message exceeds Discord length after truncation')
     return result
