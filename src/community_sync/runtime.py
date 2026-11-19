@@ -335,15 +335,12 @@ class CommunityRuntime:
         except RemoteCommunityGroupConflict:
             return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                                   "remote post Group or original owner conflict")
-        # The first accepted Create owns the content for *all* forum targets.
-        # Legacy rows without that proof must not adopt a late replay's body.
+        # The original Create proves provenance, while the writer-reserved
+        # Group view owns the content for each specific outbound attempt.
         if thread_group.inbound_create_snapshot_json is None:
             return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                                   "remote root lacks immutable first Create content")
         from ..activitypub_models import ActivityPubObject
-        canonical_event = event.model_copy(update={
-            "object": ActivityPubObject.model_validate(thread_group.inbound_create_snapshot_json),
-        })
         bot = self.bot or runtime.bot
         delivered = 0
         for subscription in accepted:
@@ -356,6 +353,9 @@ class CommunityRuntime:
             if reservation.state != "reserved":
                 continue
             attempt = reservation.attempt_id
+            canonical_event = event.model_copy(update={
+                "object": ActivityPubObject.model_validate(reservation.display_object_json),
+            })
             # Fetching a channel is read-only; failure is provably before create_thread.
             try:
                 forum = await bot.fetch_forum_channel(channel)
@@ -486,9 +486,6 @@ class CommunityRuntime:
             return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                                   "remote reply lacks immutable first Create content")
         from ..activitypub_models import ActivityPubObject
-        canonical_event = event.model_copy(update={
-            "object": ActivityPubObject.model_validate(message_group.inbound_create_snapshot_json),
-        })
         bot = self.bot or runtime.bot
         delivered = 0
         allowed_channels = {s.discord_channel_id for s in accepted}
@@ -504,6 +501,9 @@ class CommunityRuntime:
             if reservation.state != "reserved":
                 continue
             attempt = reservation.attempt_id
+            canonical_event = event.model_copy(update={
+                "object": ActivityPubObject.model_validate(reservation.display_object_json),
+            })
             try:
                 thread = await bot.get_thread_by_id(delivery.discord_thread_id)
             except Exception:

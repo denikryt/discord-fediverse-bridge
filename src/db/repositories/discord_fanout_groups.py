@@ -30,6 +30,8 @@ class RemoteTargetReservation:
 
     state: str
     attempt_id: str | None = None
+    view_revision: int | None = None
+    display_object_json: dict | None = None
 
 
 class DiscordFanoutGroupRepository(BaseRepository):
@@ -347,6 +349,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 community_actor_id=community_actor_id, ap_object_id=ap_object_id,
                 ap_activity_id=ap_activity_id, source_owner_actor_id=source_owner_actor_id,
                 inbound_create_snapshot_json=first_object_json,
+                display_object_json=first_object_json,
                 source_channel_id=None, source_thread_id=None, source_starter_message_id=None,
             )
             session.add(group)
@@ -386,6 +389,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 community_actor_id=community_actor_id, ap_object_id=ap_object_id,
                 ap_activity_id=ap_activity_id, source_owner_actor_id=source_owner_actor_id,
                 inbound_create_snapshot_json=first_object_json,
+                display_object_json=first_object_json,
                 thread_group_id=thread_group_id, parent_message_group_id=parent_message_group_id,
                 source_channel_id=None, source_thread_id=None, source_message_id=None,
             )
@@ -424,6 +428,12 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 ChannelCommunitySubscription.status == "accepted",
             )) is None:
                 return RemoteTargetReservation("not_subscribed")
+            # An authenticated Group tombstone fences even a newly subscribed
+            # destination. A Person Note returning HTTP 200 cannot override it.
+            if group.view_state == "deleted":
+                return RemoteTargetReservation("deleted")
+            if group.display_object_json is None:
+                return RemoteTargetReservation("unverified_view")
             if session.scalar(select(delivery.id).where(
                 delivery_fk == group_id, delivery.discord_channel_id == discord_channel_id
             )) is not None:
@@ -445,8 +455,12 @@ class DiscordFanoutGroupRepository(BaseRepository):
             claim.attempt_id = attempt_id
             claim.attempt_started_at = datetime.now(timezone.utc)
             claim.status = "claimed"
+            claim.reserved_view_revision = group.view_revision
+            claim.reconciliation_marker_version = 1
             session.flush()
-            return RemoteTargetReservation("reserved", attempt_id)
+            return RemoteTargetReservation(
+                "reserved", attempt_id, group.view_revision, dict(group.display_object_json)
+            )
 
     def finish_remote_target(
         self, *, kind: str, group_id: int, discord_channel_id: int, attempt_id: str,
@@ -468,6 +482,9 @@ class DiscordFanoutGroupRepository(BaseRepository):
             session.add(delivery)
             session.flush()
             claim.status = "completed"
+            # The source revision reserved before REST is the maximum proven
+            # on this Discord copy. A concurrent mutation remains outstanding.
+            claim.applied_revision = claim.reserved_view_revision
 
     def mark_remote_target(
         self, *, kind: str, group_id: int, discord_channel_id: int,

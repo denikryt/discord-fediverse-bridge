@@ -72,7 +72,7 @@ class VersionTwoMigrationTests(unittest.TestCase):
         db = Database(f"sqlite:///{self.path}")
         self.addCleanup(db.close)
         db.migrate()
-        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v2")
+        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v3")
         db.migrate()
 
     def test_populated_v1_preserves_ids_and_external_fks(self) -> None:
@@ -108,7 +108,7 @@ class VersionTwoMigrationTests(unittest.TestCase):
                 kind="comment", body_markdown="reply", discord_guild_id=1,
                 discord_channel_id=10, discord_message_id=777,
             ))
-        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v2")
+        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v3")
 
     def test_mid_upgrade_exception_does_not_stamp_partial_state(self) -> None:
         """A DDL failure rolls back renamed tables, data, and schema header."""
@@ -122,7 +122,7 @@ class VersionTwoMigrationTests(unittest.TestCase):
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT id FROM published_activity_objects").fetchone()[0], 17)
         db.migrate()
-        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v2")
+        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v3")
 
     def test_existing_v1_receives_restorable_backup_before_upgrade(self) -> None:
         """A real v1 installation gets a protected pre-v2 media/database archive."""
@@ -143,7 +143,7 @@ class VersionTwoMigrationTests(unittest.TestCase):
                 identity=Stage4IdentityMigrationConfig("https://bridge.test", "bridge"),
             )
         self.assertIsNotNone(archived)
-        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v2")
+        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v3")
         restored = root / "restored-v1.db"
         with tarfile.open(archived, "r:gz") as archive:
             content = archive.extractfile("bridge.db")
@@ -214,10 +214,10 @@ class VersionTwoMigrationTests(unittest.TestCase):
             session.add(RemotePersonChannelAssignment(
                 follow_id=charlie.id, discord_guild_id=1, discord_channel_id=100))
         with sqlite3.connect(self.path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
             self.assertEqual(connection.execute(
                 "SELECT COUNT(*) FROM remote_person_channel_assignments").fetchone()[0], 3)
-        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v2")
+        self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v3")
 
     def test_constraints_reject_invalid_or_duplicated_remote_identity(self) -> None:
         """Follow generations, placement XOR, context and root identity are SQL-enforced."""

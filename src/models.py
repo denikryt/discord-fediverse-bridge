@@ -142,6 +142,10 @@ class ActivityPubEventReceipt(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detail: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # R02: a terminal receipt and its validated payload identity are committed
+    # in the very same transaction as the corresponding Group-view revision.
+    mutation_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    group_view_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -922,6 +926,7 @@ class CommunityThreadGroup(Base):
         Index("uq_remote_thread_group_object", "community_actor_id", "ap_object_id",
               unique=True, sqlite_where=text(
                   "ap_object_id IS NOT NULL AND source_channel_id IS NULL AND source_thread_id IS NULL")),
+        CheckConstraint("view_state IN ('live', 'deleted')", name="ck_remote_thread_view_state"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -938,6 +943,13 @@ class CommunityThreadGroup(Base):
     source_owner_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # The first verified AP object is immutable across Announce retries and forums.
     inbound_create_snapshot_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Remote Group delivery has a mutable *representation*, not a mutable
+    # author-owned ActivityPub object. Preserve the first-Create proof above.
+    view_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    view_state: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'live'"))
+    display_object_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    view_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_view_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -979,6 +991,7 @@ class CommunityMessageGroup(Base):
                   "ap_object_id IS NOT NULL AND source_channel_id IS NULL AND source_message_id IS NULL")),
         Index("uq_source_discord_reply_message", "source_message_id", unique=True,
               sqlite_where=text("source_message_id IS NOT NULL")),
+        CheckConstraint("view_state IN ('live', 'deleted')", name="ck_remote_message_view_state"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -992,6 +1005,13 @@ class CommunityMessageGroup(Base):
     source_owner_actor_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # Late retries use the first verified Note, never a replacement reply body.
     inbound_create_snapshot_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Remote Group delivery has a mutable *representation*, not a mutable
+    # author-owned ActivityPub object. Preserve the first-Create proof above.
+    view_revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    view_state: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'live'"))
+    display_object_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    view_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_view_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # FK to another CommunityMessageGroup if this message is a reply.
     parent_message_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -1052,6 +1072,14 @@ class CommunityDiscordTargetClaim(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     attempt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attempt_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # One claim exists even when Discord returned no message ID. Create's
+    # attempt_id is independent from later CAS-protected Edit/Delete leases.
+    reserved_view_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reconciliation_marker_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    applied_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mutation_attempt_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
 
 class BridgeActorFollow(Base):

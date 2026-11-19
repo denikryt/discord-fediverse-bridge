@@ -306,9 +306,31 @@ existing rows and the unchanged source. It checks `PRAGMA user_version=2`, forei
 integrity and the complete v2 physical schema fingerprint before returning.
 Replace the development database only after inspecting the output and with
 all writers stopped; keep the original database and media backup for rollback.
-No production startup performs this operation, and no v3 migration is added.
+No production startup performs this **old-v2 alignment**. The subsequent v2→v3 migration is a separately validated, versioned startup step.
 
 After the approved offline operation, check `PRAGMA user_version` (=2),
 `PRAGMA integrity_check` (=ok), `PRAGMA foreign_key_check` (empty), and that
 startup accepts the frozen v2 physical fingerprint. Verify an immediate
 second startup is read-only and does not create a new migration backup.
+
+
+### Plan 146 — SQLite v3 Group-view migration
+
+The application target schema is v3. The immutable v1/v2 SQL snapshots remain
+valid source formats; a stopped, verified v2 database is migrated to v3 under
+the existing exclusive deployment lock after a complete recoverable backup.
+Startup **refuses** modified v2/v3 physical schemas rather than repairing them.
+The v2→v3 transaction preserves the canonical Community Group rows, original
+Create snapshots, all proven Discord delivery IDs, and original ambiguous
+`claimed`/`unknown` attempts. It seeds the Group display only from proven
+inbound Create snapshots and creates missing completed target claims only when
+a pre-existing bot-owned inbound delivery supplies an actual Discord ID.
+Legacy unknown attempts with no exact marker remain unresolved and must be
+reviewed manually; never replay a Discord POST on the assumption it failed.
+
+After authorized startup, check `PRAGMA user_version` (=3),
+`PRAGMA integrity_check` (=ok), `PRAGMA foreign_key_check` (empty), and the
+exact `v3.sql` fingerprint. A second start must not write or issue another
+migration archive. Do not apply this migration to the live development database
+without owner approval. The historical `align_dev_v2_assignments` CLI only
+repairs explicitly supported *old-v2* inputs, and does not create v3 data.

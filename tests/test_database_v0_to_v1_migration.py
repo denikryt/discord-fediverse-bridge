@@ -337,7 +337,7 @@ def test_legacy_main_upgrade_selectively_invalidates_changed_actor_relationships
         with database.engine.connect() as conn:
             # The production runner now completes both registered schema steps
             # before admitting a legacy deployment; v1 is only intermediate.
-            assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 2
+            assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 3
             assert conn.execute(text("SELECT actor_url FROM bridge_actor_keys")).scalar_one() == (
                 "https://bridge.example/actors/services/bridge"
             )

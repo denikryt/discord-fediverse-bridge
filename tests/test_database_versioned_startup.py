@@ -35,7 +35,7 @@ def _schema_file(tmp_path: Path, name: str) -> Path:
 def test_supported_v0_preflight_is_read_only_and_upgrades_once(
     tmp_path: Path, name: str, profile: str
 ) -> None:
-    """Admit exact source profiles, upgrade, then leave v2 stable on restart."""
+    """Admit exact source profiles, upgrade, then leave v3 stable on restart."""
     path = _schema_file(tmp_path, name)
     database = Database(f"sqlite:///{path}")
     try:
@@ -43,7 +43,7 @@ def test_supported_v0_preflight_is_read_only_and_upgrades_once(
         assert read_database_state(database.engine) == SQLiteDatabaseState(0, profile)
         assert path.read_bytes() == before
         database.migrate()
-        assert read_database_state(database.engine) == SQLiteDatabaseState(2, "ready_v2")
+        assert read_database_state(database.engine) == SQLiteDatabaseState(3, "ready_v3")
         after = path.read_bytes()
         database.migrate()
         assert path.read_bytes() == after
@@ -61,14 +61,14 @@ def test_empty_v0_bootstrap_creates_full_v2_schema(tmp_path: Path) -> None:
         assert read_database_state(database.engine) == SQLiteDatabaseState(0, "empty_v0")
         database.migrate()
         with sqlite3.connect(path) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+            assert connection.execute("PRAGMA user_version").fetchone() == (3,)
             assert connection.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchone() == (49,)
-        assert read_database_state(database.engine).profile == "ready_v2"
+        assert read_database_state(database.engine).profile == "ready_v3"
     finally:
         database.close()
 
 
-@pytest.mark.parametrize("bad_version", [-1, 3, 42])
+@pytest.mark.parametrize("bad_version", [-1, 4, 42])
 def test_invalid_or_future_header_is_rejected_without_ddl(
     tmp_path: Path, bad_version: int
 ) -> None:
@@ -131,7 +131,7 @@ def test_registry_gap_fails_before_sqlite_changes(
         monkeypatch.setattr("src.db.migrations.MIGRATIONS", {})
         with pytest.raises(RuntimeError, match="invalid SQLite migration registry"):
             database.migrate()
-        assert DATABASE_VERSION == 2
-        assert MIGRATIONS.get(1) is not None and MIGRATIONS.get(2) is not None
+        assert DATABASE_VERSION == 3
+        assert MIGRATIONS.get(1) is not None and MIGRATIONS.get(2) is not None and MIGRATIONS.get(3) is not None
     finally:
         database.close()

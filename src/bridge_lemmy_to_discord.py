@@ -8,8 +8,10 @@ import discord
 
 from .activitypub_models import ActivityPubEvent
 from .formatting import (
-    format_lemmy_comment_for_discord,
-    format_lemmy_post_for_discord,
+    feed_comment_content,
+    format_fediverse_author_for_discord,
+    render_feed_discord_message,
+    validate_feed_object_url,
     format_thread_title_for_discord,
     normalize_text,
 )
@@ -122,12 +124,18 @@ async def _create_inbound_discord_thread(
     """
     post = event.object
     title = format_thread_title_for_discord(post.title or "Untitled Lemmy Post")
-    body = format_lemmy_post_for_discord(
-        post.author_name,
-        post.title or "Untitled Lemmy Post",
-        normalize_text(post.body_markdown),
-        post.url,
-        actor_id=event.actor_id,
+    # Only bridge-owned inbound Community roots receive an immutable,
+    # complete last-line AP identity. The claimed ID remains discoverable after
+    # a timeout even when the (untrusted) body exceeds Discord's limit.
+    canonical_id = validate_feed_object_url(post.ap_id)
+    author = format_fediverse_author_for_discord(post.author_name, event.actor_id)
+    body_text = normalize_text(post.body_markdown)
+    if post.url and post.url != post.ap_id:
+        body_text = f"{body_text}\n\n{post.url}" if body_text else post.url
+    body = render_feed_discord_message(
+        header=f"**{post.title or 'Untitled Lemmy Post'}**\nAuthor: {author}",
+        body=body_text,
+        footer=canonical_id,
     )
 
     result = await forum_channel.create_thread(name=title, content=body, suppress_embeds=True)
@@ -170,11 +178,13 @@ async def _send_inbound_comment(
     The reference is already resolved by the caller via _resolve_inbound_reference.
     """
     comment = event.object
-    body = format_lemmy_comment_for_discord(
-        comment.author_name,
-        normalize_text(comment.body_markdown),
-        comment.url,
+    # Remote Community comments use the same exact first-paragraph identity
+    # as other bridge-created bot comments, never a substring from the body.
+    body = feed_comment_content(
+        actor_name=comment.author_name,
         actor_id=event.actor_id,
+        object_id=comment.ap_id,
+        body=normalize_text(comment.body_markdown),
     )
     message = await thread.send(body, reference=reference, suppress_embeds=True)
     logger.info(
