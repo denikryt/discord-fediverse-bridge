@@ -43,4 +43,4 @@ The six Gateway CP35 failure groups were: `community-follow-sender`, `direct-upd
 - **Legitimate inputs:** a valid Group update after subscription, a title-less Person edit, a URL-based offline unsubscribe, and a long but fitting Markdown link must still succeed. Legacy `unknown`/`claimed` attempts without markers remain unresolved rather than being incorrectly adopted.
 - **Race boundaries:** a delayed confirmed Create retains its reserved old revision and is due for subsequent Delete; per-target Edit/Delete uses a distinct CAS token from Create. A crash before the atomic receipt/view transaction leaves no new revision, after it retains a terminal fingerprinted receipt. These properties were validated on disposable SQLite/transport fixtures but not under real network cancellation.
 
-**No live v2→v3 migration was performed.** Production/dev backup, exact schema guard and permission checks remain mandatory before any rollout; see `docs/DEPLOY.md`.
+**No live schema conversion was performed.** Production/dev backup, exact schema guard and permission checks remain mandatory before any rollout; see `docs/DEPLOY.md`.

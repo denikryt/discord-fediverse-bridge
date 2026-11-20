@@ -1,15 +1,17 @@
--- Immutable SQLite v2 physical schema; validated by schema_entries_fingerprint.
+-- Fixed SQLite v2 physical schema with Group-view columns and typed claim cursors.
 CREATE TABLE activitypub_event_receipts (
-	id INTEGER NOT NULL,
-	delivery_id VARCHAR(128) NOT NULL,
-	verified_destination_group_actor_id VARCHAR(512),
-	event_type VARCHAR(64) NOT NULL,
-	object_ap_id VARCHAR(512) NOT NULL,
-	status VARCHAR(32) NOT NULL,
-	outcome VARCHAR(64),
-	detail VARCHAR(1024),
-	created_at DATETIME NOT NULL,
-	updated_at DATETIME NOT NULL,
+	id INTEGER NOT NULL, 
+	delivery_id VARCHAR(128) NOT NULL, 
+	verified_destination_group_actor_id VARCHAR(512), 
+	event_type VARCHAR(64) NOT NULL, 
+	object_ap_id VARCHAR(512) NOT NULL, 
+	status VARCHAR(32) NOT NULL, 
+	outcome VARCHAR(64), 
+	detail VARCHAR(1024), 
+	mutation_fingerprint VARCHAR(64), 
+	group_view_revision INTEGER, 
+	created_at DATETIME NOT NULL, 
+	updated_at DATETIME NOT NULL, 
 	PRIMARY KEY (id)
 );
 CREATE TABLE bridge_actor_follows (
@@ -104,18 +106,24 @@ CREATE TABLE community_actor_bans (
 	UNIQUE (scope, scope_key, actor_handle, status)
 );
 CREATE TABLE community_discord_target_claims (
-	id INTEGER NOT NULL,
-	thread_group_id INTEGER,
-	message_group_id INTEGER,
-	discord_channel_id INTEGER NOT NULL,
-	kind VARCHAR(16) NOT NULL,
-	status VARCHAR(16) NOT NULL,
-	attempt_id VARCHAR(64),
-	attempt_started_at DATETIME,
-	PRIMARY KEY (id),
-	CONSTRAINT ck_discord_target_kind_fk CHECK ((thread_group_id IS NOT NULL AND message_group_id IS NULL AND kind = 'post') OR (thread_group_id IS NULL AND message_group_id IS NOT NULL AND kind = 'comment')),
-	CONSTRAINT ck_discord_target_status CHECK (status IN ('claimed', 'failed', 'completed', 'unknown')),
-	FOREIGN KEY(thread_group_id) REFERENCES community_thread_groups (id) ON DELETE CASCADE,
+	id INTEGER NOT NULL, 
+	thread_group_id INTEGER, 
+	message_group_id INTEGER, 
+	discord_channel_id INTEGER NOT NULL, 
+	kind VARCHAR(16) NOT NULL, 
+	status VARCHAR(16) NOT NULL, 
+	attempt_id VARCHAR(64), 
+	attempt_started_at DATETIME, 
+	reserved_view_revision INTEGER, 
+	reconciliation_marker_version INTEGER, 
+	applied_revision INTEGER, 
+	mutation_attempt_token VARCHAR(64), 
+	next_attempt_at DATETIME, 
+	last_error VARCHAR(1024), 
+	PRIMARY KEY (id), 
+	CONSTRAINT ck_discord_target_kind_fk CHECK ((thread_group_id IS NOT NULL AND message_group_id IS NULL AND kind = 'post') OR (thread_group_id IS NULL AND message_group_id IS NOT NULL AND kind = 'comment')), 
+	CONSTRAINT ck_discord_target_status CHECK (status IN ('claimed', 'failed', 'completed', 'unknown')), 
+	FOREIGN KEY(thread_group_id) REFERENCES community_thread_groups (id) ON DELETE CASCADE, 
 	FOREIGN KEY(message_group_id) REFERENCES community_message_groups (id) ON DELETE CASCADE
 );
 CREATE TABLE community_message_group_deliveries (
@@ -130,19 +138,25 @@ CREATE TABLE community_message_group_deliveries (
 	UNIQUE (discord_message_id)
 );
 CREATE TABLE community_message_groups (
-	id INTEGER NOT NULL,
-	community_actor_id VARCHAR(512) NOT NULL,
-	thread_group_id INTEGER NOT NULL,
-	source_channel_id INTEGER,
-	source_thread_id INTEGER,
-	source_message_id INTEGER,
-	ap_activity_id VARCHAR(512),
-	ap_object_id VARCHAR(512),
-	source_owner_actor_id VARCHAR(512),
-	inbound_create_snapshot_json JSON,
-	parent_message_group_id INTEGER,
-	created_at DATETIME NOT NULL,
-	PRIMARY KEY (id)
+	id INTEGER NOT NULL, 
+	community_actor_id VARCHAR(512) NOT NULL, 
+	thread_group_id INTEGER NOT NULL, 
+	source_channel_id INTEGER, 
+	source_thread_id INTEGER, 
+	source_message_id INTEGER, 
+	ap_activity_id VARCHAR(512), 
+	ap_object_id VARCHAR(512), 
+	source_owner_actor_id VARCHAR(512), 
+	inbound_create_snapshot_json JSON, 
+	view_revision INTEGER DEFAULT 0 NOT NULL, 
+	view_state VARCHAR(16) DEFAULT 'live' NOT NULL, 
+	display_object_json JSON, 
+	view_updated_at DATETIME, 
+	last_view_activity_id VARCHAR(512), 
+	parent_message_group_id INTEGER, 
+	created_at DATETIME NOT NULL, 
+	PRIMARY KEY (id), 
+	CONSTRAINT ck_remote_message_view_state CHECK (view_state IN ('live', 'deleted'))
 );
 CREATE TABLE community_thread_group_deliveries (
 	id INTEGER NOT NULL,
@@ -156,17 +170,23 @@ CREATE TABLE community_thread_group_deliveries (
 	UNIQUE (discord_thread_id)
 );
 CREATE TABLE community_thread_groups (
-	id INTEGER NOT NULL,
-	community_actor_id VARCHAR(512) NOT NULL,
-	source_channel_id INTEGER,
-	source_thread_id INTEGER,
-	source_starter_message_id INTEGER,
-	ap_activity_id VARCHAR(512),
-	ap_object_id VARCHAR(512),
-	source_owner_actor_id VARCHAR(512),
-	inbound_create_snapshot_json JSON,
-	created_at DATETIME NOT NULL,
-	PRIMARY KEY (id),
+	id INTEGER NOT NULL, 
+	community_actor_id VARCHAR(512) NOT NULL, 
+	source_channel_id INTEGER, 
+	source_thread_id INTEGER, 
+	source_starter_message_id INTEGER, 
+	ap_activity_id VARCHAR(512), 
+	ap_object_id VARCHAR(512), 
+	source_owner_actor_id VARCHAR(512), 
+	inbound_create_snapshot_json JSON, 
+	view_revision INTEGER DEFAULT 0 NOT NULL, 
+	view_state VARCHAR(16) DEFAULT 'live' NOT NULL, 
+	display_object_json JSON, 
+	view_updated_at DATETIME, 
+	last_view_activity_id VARCHAR(512), 
+	created_at DATETIME NOT NULL, 
+	PRIMARY KEY (id), 
+	CONSTRAINT ck_remote_thread_view_state CHECK (view_state IN ('live', 'deleted')), 
 	UNIQUE (source_thread_id)
 );
 CREATE TABLE discord_channel_snapshots (
@@ -863,6 +883,7 @@ CREATE UNIQUE INDEX uq_discord_target_message ON community_discord_target_claims
 CREATE UNIQUE INDEX uq_discord_target_thread ON community_discord_target_claims (thread_group_id, discord_channel_id) WHERE thread_group_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_local_relay_create ON local_community_relay_source_activities (local_community_id, source_object_ap_id) WHERE operation = 'create';
 CREATE UNIQUE INDEX uq_remote_message_group_object ON community_message_groups (community_actor_id, ap_object_id) WHERE ap_object_id IS NOT NULL AND source_channel_id IS NULL AND source_message_id IS NULL;
+CREATE UNIQUE INDEX uq_remote_person_assignment_follow_guild ON remote_person_channel_assignments (follow_id, discord_guild_id);
 CREATE UNIQUE INDEX uq_remote_person_live_follow ON remote_person_follows (user_id, remote_actor_id) WHERE relationship_status IN ('pending','accepted','cancel_requested');
 CREATE UNIQUE INDEX uq_remote_thread_group_object ON community_thread_groups (community_actor_id, ap_object_id) WHERE ap_object_id IS NOT NULL AND source_channel_id IS NULL AND source_thread_id IS NULL;
 CREATE UNIQUE INDEX uq_source_discord_reply_message ON community_message_groups (source_message_id) WHERE source_message_id IS NOT NULL;
@@ -890,4 +911,3 @@ CREATE TRIGGER users_header_media_kind_update
           SELECT CASE WHEN (SELECT media_kind FROM profile_media_assets WHERE id = NEW.header_media_id) != 'header'
             THEN RAISE(ABORT, 'header_media_id must reference header media') END;
         END;
-CREATE UNIQUE INDEX uq_remote_person_assignment_follow_guild ON remote_person_channel_assignments (follow_id, discord_guild_id);

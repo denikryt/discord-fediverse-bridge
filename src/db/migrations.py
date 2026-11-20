@@ -87,7 +87,7 @@ class _Stage4UserContentIdentity:
 # SQLite DB-version ownership is independent from application VERSION. Until
 # CP04/CP05 has assembled all v1 constraints and transfer mappings, the step
 # refuses to stamp v1 rather than leaving any runnable partial schema.
-DATABASE_VERSION = 3
+DATABASE_VERSION = 2
 
 
 # The one supported historical upgrade is complete only when its constraints
@@ -110,19 +110,9 @@ def _upgrade_v1_to_v2_step(
     upgrade_v1_to_v2(conn, profile, config)
 
 
-def _upgrade_v2_to_v3_step(
-    conn: Connection, profile: str, config: Stage4IdentityMigrationConfig | None
-) -> None:
-    """Add durable remote Group views and one cursor to each typed claim."""
-    from .migration_steps.v2_to_v3 import upgrade_v2_to_v3
-
-    upgrade_v2_to_v3(conn, profile, config)
-
-
 MIGRATIONS: dict[int, Callable[[Connection, str, Stage4IdentityMigrationConfig | None], None]] = {
     1: _upgrade_v0_to_v1_step,
     2: _upgrade_v1_to_v2_step,
-    3: _upgrade_v2_to_v3_step,
 }
 
 
@@ -234,7 +224,7 @@ def _rollback_physical_transaction(conn: Connection) -> None:
 def run_pending_migrations(
     engine: Engine, stage4_identity: Stage4IdentityMigrationConfig | None = None
 ) -> None:
-    """Perform an atomic v0/v1/v2→v3 upgrade with exact per-version DDL guards.
+    """Perform an atomic v0→v1→v2 upgrade with exact per-version DDL guards.
 
     Offline startup owns the existing EX deployment lock (CP06). The caller
     must not create tables before the read-only source admission. A second
@@ -263,7 +253,7 @@ def run_pending_migrations(
             conn.exec_driver_sql("BEGIN IMMEDIATE")
             current = _read_state_on_connection(conn)
             if current.version == DATABASE_VERSION:
-                # A concurrent v3 starter completed while we waited for EX.
+                # A concurrent v2 starter completed while we waited for EX.
                 conn.rollback()
                 return
             if current != before:

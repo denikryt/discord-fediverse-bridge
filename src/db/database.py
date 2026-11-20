@@ -119,7 +119,7 @@ class Database:
     def migrate(
         self, stage4_identity: Stage4IdentityMigrationConfig | None = None
     ) -> None:
-        """Admit SQLite input and atomically upgrade any supported source to v3."""
+        """Admit SQLite input and atomically upgrade any supported source to v2."""
         migrations.run_pending_migrations(self.engine, stage4_identity=stage4_identity)
 
     @contextmanager

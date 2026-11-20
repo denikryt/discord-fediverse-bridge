@@ -277,9 +277,9 @@ HAVING COUNT(*) > 1;
 ```
 
 If rows are returned, resolve their destination ownership with the owner;
-never delete a user's assignment automatically. The owner must then authorize
-either the one named unique index on `(follow_id, discord_guild_id)`
-or a complete **development** DB reset. The exact DDL is:
+never delete a user's assignment automatically. A verified updated-v2 DB with this index alone missing can be aligned
+explicitly; an older CP35-era v2 schema requires a separate, approved DB
+recreation or offline data-transfer procedure. The exact DDL is:
 
 ```sql
 CREATE UNIQUE INDEX uq_remote_person_assignment_follow_guild ON remote_person_channel_assignments (follow_id, discord_guild_id);
@@ -288,8 +288,9 @@ CREATE UNIQUE INDEX uq_remote_person_assignment_follow_guild ON remote_person_ch
 The strict schema guard requires the exact name and SQL shape. Do not perform
 alignment or a reset as an application startup side effect.
 
-On a stopped **development** copy with its complete backup verified, the
-explicit offline tool can create a verified output copy with the fixed v2 DDL:
+For a database that **already has the updated Group-view v2 columns** but
+lacks only the named Follow/guild index, the existing development-only CLI
+can produce a verified copy with the complete current v2 DDL:
 
 ```bash
 python -m scripts.align_dev_v2_assignments \
@@ -298,39 +299,50 @@ python -m scripts.align_dev_v2_assignments \
   --offline-confirmed
 ```
 
-The command refuses conflicting Follow/guild rows and unrelated schema
-changes. For an original CP21 physical v2 database it adds only the named
-index; the recognized CP32 table-constraint variant is rebuilt explicitly
-to the same named-index layout. It writes only a new file, preserving all
-existing rows and the unchanged source. It checks `PRAGMA user_version=2`, foreign keys, SQLite
+The command refuses conflicting Follow/guild rows and all structural drift
+outside the Follow-assignment table. Older CP21/CP32/CP35 v2 files lack the
+Group-view fields and are therefore rejected, not upgraded. The command
+writes only a new file, preserving all source rows and source bytes. It checks `PRAGMA user_version=2`, foreign keys, SQLite
 integrity and the complete v2 physical schema fingerprint before returning.
 Replace the development database only after inspecting the output and with
 all writers stopped; keep the original database and media backup for rollback.
-No production startup performs this **old-v2 alignment**. The subsequent v2→v3 migration is a separately validated, versioned startup step.
+The alignment utility only changes the historical Follow/guild index. It
+**does not add Group-view fields**, so applying it to a CP35-era v2 file is
+not sufficient for admission by the updated v2 release. It is not an
+application migration step.
 
-After the approved offline operation, check `PRAGMA user_version` (=2),
-`PRAGMA integrity_check` (=ok), `PRAGMA foreign_key_check` (empty), and that
-startup accepts the frozen v2 physical fingerprint. Verify an immediate
-second startup is read-only and does not create a new migration backup.
+After an explicitly approved offline schema operation, check
+`PRAGMA user_version` (=2), `PRAGMA integrity_check` (=ok),
+`PRAGMA foreign_key_check` (empty), and the complete updated `v2.sql`
+fingerprint. Verify a second startup is read-only.
 
 
-### Plan 146 — SQLite v3 Group-view migration
+### Plan 146 — updated SQLite v2 Group-view schema
 
-The application target schema is v3. The immutable v1/v2 SQL snapshots remain
-valid source formats; a stopped, verified v2 database is migrated to v3 under
-the existing exclusive deployment lock after a complete recoverable backup.
-Startup **refuses** modified v2/v3 physical schemas rather than repairing them.
-The v2→v3 transaction preserves the canonical Community Group rows, original
-Create snapshots, all proven Discord delivery IDs, and original ambiguous
-`claimed`/`unknown` attempts. It seeds the Group display only from proven
-inbound Create snapshots and creates missing completed target claims only when
-a pre-existing bot-owned inbound delivery supplies an actual Discord ID.
-Legacy unknown attempts with no exact marker remain unresolved and must be
-reviewed manually; never replay a Discord POST on the assumption it failed.
+The application schema version remains **2**. `src/db/schema_versions/v2.sql`
+contains the Group-view, receipt-fingerprint and typed claim-cursor fields.
+The automatic migration chain is exclusively `v0→v1→v2`, using the existing
+single-writer transaction, strict source DDL validation and protected backup.
+`v1→v2` rebuilds the four pre-existing Group/receipt/claim tables alongside
+the Remote Person additions. It preserves existing IDs and immutable Create
+snapshots, seeds display projections only from verified inbound Create data,
+and seeds completed revision cursors only for proven inbound Discord deliveries.
+Old ambiguous `unknown`/`claimed` attempts remain unresolved and are **never**
+re-posted on an assumption that the first Discord send failed.
 
-After authorized startup, check `PRAGMA user_version` (=3),
-`PRAGMA integrity_check` (=ok), `PRAGMA foreign_key_check` (empty), and the
-exact `v3.sql` fingerprint. A second start must not write or issue another
-migration archive. Do not apply this migration to the live development database
-without owner approval. The historical `align_dev_v2_assignments` CLI only
-repairs explicitly supported *old-v2* inputs, and does not create v3 data.
+**Already stamped `user_version=2` databases with a previous physical v2
+schema are incompatible.** Startup rejects them without modifying the file:
+there is no automatic v2→v2 repair, v2→v3 migration or v3→v2 downgrade.
+In particular, the old assignment-index-only CLI does not make a CP35 v2
+file compatible with the new Group-view DDL. Keep an independently verified
+full database/media backup and obtain explicit owner authorization before
+recreating a development database or carrying out a separately reviewed
+offline data transfer. Do not simply change `PRAGMA user_version` or copy
+schema files over a populated database. Databases already stamped as v3 are
+also rejected; restore an appropriate source backup before migrating.
+
+For a clean DB or approved v0/v1 source, confirm `PRAGMA user_version=2`,
+`PRAGMA integrity_check=ok`, an empty `PRAGMA foreign_key_check`, and exact
+physical DDL agreement with `v2.sql`. A second startup must not write or
+create an additional migration backup. Inspect previous ambiguous claims and
+orphan Group receipts before any live rollout; do not declare them repaired.

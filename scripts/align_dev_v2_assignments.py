@@ -1,8 +1,8 @@
 """Explicit, offline-only development v2 assignment-table alignment.
 
-Create a *new* verified SQLite file from an older physical v2 file. Never
-change the source or migrate on application startup; only the operator may
-replace a stopped development database after preserving an external backup.
+Align only the Follow-assignment index on the current Group-view v2 schema.
+Old CP21/CP32/CP35 physical v2 files are not valid sources because they lack
+Group-view columns. Never change the source or align on application startup.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _reference() -> tuple[sqlite3.Connection, dict[str, str]]:
 
 
 def _guard_source(db: sqlite3.Connection, reference: sqlite3.Connection, ddl: dict[str, str]) -> bool:
-    """Admit only current v2 or its precise previous assignment-table variant."""
+    """Admit updated v2 or an otherwise exact index-only variant."""
     if db.execute('PRAGMA user_version').fetchone()[0] != 2:
         raise ValueError('only development SQLite user_version=2 is accepted')
     if db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or db.execute('PRAGMA foreign_key_check').fetchone():

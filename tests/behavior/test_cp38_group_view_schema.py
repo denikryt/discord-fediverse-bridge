@@ -1,6 +1,6 @@
-"""SQLite v3 Group view is durable without separate view/cursor tables.
+"""Updated SQLite v2 Group view is durable without separate view/cursor tables.
 
-Use a literal frozen v2 schema on disk; assertions exercise migration and the
+Use a literal frozen v1 schema on disk; assertions exercise migration and the
 same production target-admission writer that precedes Discord POST.
 """
 
@@ -31,12 +31,12 @@ def _post_json() -> dict:
                 author_name="alice", body_markdown="Original")
 
 
-def _v2(path: Path) -> None:
+def _v1(path: Path) -> None:
     """Create an immutable v2 input without relying on current ORM."""
-    schema = Path(__file__).parents[2] / "src/db/schema_versions/v2.sql"
+    schema = Path(__file__).parents[2] / "src/db/schema_versions/v1.sql"
     with sqlite3.connect(path) as conn:
         conn.executescript(schema.read_text())
-        conn.execute("PRAGMA user_version=2")
+        conn.execute("PRAGMA user_version=1")
         conn.execute("INSERT INTO community_thread_groups"
                      "(id,community_actor_id,ap_object_id,source_owner_actor_id,"
                      "inbound_create_snapshot_json,created_at) VALUES(1,?,?,?,?,?)",
@@ -55,15 +55,15 @@ def _v2(path: Path) -> None:
                      " VALUES(1,13,'post','claimed','old-inflight')")
 
 
-def test_populated_v2_to_v3_retains_proof_and_unknown_claims(tmp_path: Path) -> None:
+def test_populated_v1_to_updated_v2_retains_proof_and_unknown_claims(tmp_path: Path) -> None:
     """Never convert markerless unknown or local mirror into completed proof."""
     path = tmp_path / "populated.db"
-    _v2(path)
+    _v1(path)
     db = Database(f"sqlite:///{path}")
     try:
-        assert read_database_state(db.engine).profile == 'ready_v2'
+        assert read_database_state(db.engine).profile == 'ready_v1'
         db.migrate()
-        assert read_database_state(db.engine).profile == 'ready_v3'
+        assert read_database_state(db.engine).profile == 'ready_v2'
         with db.session() as sess:
             group = sess.get(CommunityThreadGroup, 1)
             assert group.view_revision == 0 and group.view_state == 'live'
