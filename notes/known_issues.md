@@ -1,3 +1,13 @@
+## Fedify CI Python fixture setup — fixed and VM verified (2026-11-20)
+
+PR #25's Fedify job failed because the publication fixture invoked a missing
+`../.venv/bin/python`. Publication/empty SQLite fixtures now use `node:sqlite`,
+with the existing scenarios run from an isolated working directory as a regression.
+The full suite also intentionally validates payloads with Python's real schema;
+the Fedify matrix job now installs its own frozen Python environment. Red/green
+fixture verification and all 52 gateway scripts passed in the VM. Changes are
+verified in the VM; the next GitHub Actions result remains pending.
+
 ## Plan 145 F3 — crash-fixture acceptance barrier (fixed locally, 2026-11-19)
 
 The P0 accepted-Create/SIGKILL test used existence of a physical JSONL file

@@ -27,6 +27,13 @@ Run the complete Fedify gateway TypeScript suite:
 cd fedify-gateway && npm test
 ```
 
+The gateway suite runs on Node 22 with dependencies installed by `npm ci`.
+Its cross-language contract test uses the repository `.venv` to validate events
+against the real Python schema. CI prepares that environment with
+`uv sync --frozen --extra dev` from the repository root in the Fedify job itself.
+SQLite fixtures use `node:sqlite`; the published-object scenarios execute from
+an isolated working directory to verify their independence from Python setup.
+
 Run the complete relay exploration layer only:
 
 ```bash

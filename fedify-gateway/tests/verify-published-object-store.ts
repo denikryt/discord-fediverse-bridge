@@ -1,8 +1,9 @@
+/** Verify persisted publication reads and routes from an isolated Node-only workspace. */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { PythonBridgeClient } from "../src/python-bridge-client.js";
 import { closeAllPythonBridgeFixtures, startPythonBridgeFixture } from "./support/python-bridge-fixture.js";
@@ -344,6 +345,7 @@ async function testStoredObjectsRemainReadableAcrossFreshDbOpens(): Promise<void
   );
 }
 
+/** Seed a disk-backed publication fixture before exposing its read API. */
 async function withPublishedObjectDatabase(
   rows: Array<Record<string, string | null>>,
   fn: (databaseUrl: string) => Promise<void>,
@@ -352,18 +354,7 @@ async function withPublishedObjectDatabase(
   const databasePath = path.join(tempDir, "published-objects.sqlite3");
 
   try {
-    execFileSync(
-      "../.venv/bin/python",
-      ["-c", buildDatabaseBootstrapScript()],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          BRIDGE_TEST_DB_PATH: databasePath,
-          BRIDGE_TEST_ROWS_JSON: JSON.stringify(rows),
-        },
-      },
-    );
+    createPublishedObjectDatabase(databasePath, rows);
     await fn(await startPythonBridgeFixture(databasePath));
   } finally {
     rmSync(tempDir, { force: true, recursive: true });
@@ -371,22 +362,15 @@ async function withPublishedObjectDatabase(
 }
 
 
+/** Expose a valid empty SQLite file to exercise absent-table reads. */
 async function withEmptyDatabase(fn: (databaseUrl: string) => Promise<void>): Promise<void> {
   const tempDir = mkdtempSync(path.join(tmpdir(), "published-object-store-empty-"));
   const databasePath = path.join(tempDir, "empty.sqlite3");
 
   try {
-    execFileSync(
-      "../.venv/bin/python",
-      ["-c", "import os, sqlite3; sqlite3.connect(os.environ['BRIDGE_TEST_DB_PATH']).close()"],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          BRIDGE_TEST_DB_PATH: databasePath,
-        },
-      },
-    );
+    // Opening the native connection creates the file without adding a schema.
+    const database = new DatabaseSync(databasePath);
+    database.close();
     await fn(await startPythonBridgeFixture(databasePath));
   } finally {
     rmSync(tempDir, { force: true, recursive: true });
@@ -408,74 +392,90 @@ function buildRouteTestConfig(pythonBridgeInternalUrl: string): GatewayConfig {
   };
 }
 
-function buildDatabaseBootstrapScript(): string {
-  return `
-import json
-import os
-import sqlite3
-
-db_path = os.environ["BRIDGE_TEST_DB_PATH"]
-rows = json.loads(os.environ["BRIDGE_TEST_ROWS_JSON"])
-connection = sqlite3.connect(db_path)
-cursor = connection.cursor()
-cursor.execute("""
-CREATE TABLE published_activity_objects (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  actor_username TEXT NOT NULL,
-  actor_url TEXT NOT NULL,
-  community_actor_url TEXT NOT NULL,
-  activity_id TEXT NOT NULL UNIQUE,
-  object_id TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL,
-  title TEXT NULL,
-  body_markdown TEXT NOT NULL,
-  in_reply_to_object_id TEXT NULL,
-  discord_channel_id INTEGER NULL,
-  discord_message_id INTEGER NULL,
-  published_at TEXT NOT NULL,
-  created_at TEXT NOT NULL
-)
-""")
-for row in rows:
-    cursor.execute(
-        """
-        INSERT INTO published_activity_objects (
-          actor_username,
-          actor_url,
-          community_actor_url,
-          activity_id,
-          object_id,
-          kind,
-          title,
-          body_markdown,
-          in_reply_to_object_id,
-          discord_channel_id,
-          discord_message_id,
-          published_at,
-          created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
-        """,
-        (
-          row["actor_username"],
-          row["actor_url"],
-          row["community_actor_url"],
-          row["activity_id"],
-          row["object_id"],
-          row["kind"],
-          row["title"],
-          row["body_markdown"],
-          row["in_reply_to_object_id"],
-          "2026-05-08T12:00:00Z",
-          "2026-05-08T12:00:00Z",
-        ),
-    )
-connection.commit()
-connection.close()
-`;
+/** Persist fixture rows using the same Node SQLite API as the read-side harness. */
+function createPublishedObjectDatabase(
+  databasePath: string,
+  rows: Array<Record<string, string | null>>,
+): void {
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      CREATE TABLE published_activity_objects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        actor_username TEXT NOT NULL,
+        actor_url TEXT NOT NULL,
+        community_actor_url TEXT NOT NULL,
+        activity_id TEXT NOT NULL UNIQUE,
+        object_id TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        title TEXT NULL,
+        body_markdown TEXT NOT NULL,
+        in_reply_to_object_id TEXT NULL,
+        discord_channel_id INTEGER NULL,
+        discord_message_id INTEGER NULL,
+        published_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    `);
+    const insert = database.prepare(`
+      INSERT INTO published_activity_objects (
+        actor_username,
+        actor_url,
+        community_actor_url,
+        activity_id,
+        object_id,
+        kind,
+        title,
+        body_markdown,
+        in_reply_to_object_id,
+        discord_channel_id,
+        discord_message_id,
+        published_at,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+    `);
+    for (const row of rows) {
+      insert.run(
+        row.actor_username,
+        row.actor_url,
+        row.community_actor_url,
+        row.activity_id,
+        row.object_id,
+        row.kind,
+        row.title,
+        row.body_markdown,
+        row.in_reply_to_object_id,
+        "2026-05-08T12:00:00Z",
+        "2026-05-08T12:00:00Z",
+      );
+    }
+  } finally {
+    // Close the writer before the HTTP fixture opens independent read connections.
+    database.close();
+  }
 }
 
-try {
-  await main();
-} finally {
-  await closeAllPythonBridgeFixtures();
+/** Run the existing scenarios without inheriting a repository Python environment. */
+async function verifyFromIsolatedWorkspace(): Promise<void> {
+  const originalCwd = process.cwd();
+  const workspace = mkdtempSync(path.join(tmpdir(), "published-object-node-only-"));
+  const gatewayDirectory = path.join(workspace, "gateway");
+
+  try {
+    // Each verification script owns its process. A fresh parent directory makes
+    // accidental ../.venv dependencies fail even on a developer's configured repo.
+    mkdirSync(gatewayDirectory);
+    process.chdir(gatewayDirectory);
+    await main();
+  } finally {
+    // Restore the caller's directory before deleting the isolated workspace.
+    process.chdir(originalCwd);
+    try {
+      await closeAllPythonBridgeFixtures();
+    } finally {
+      rmSync(workspace, { force: true, recursive: true });
+    }
+  }
 }
+
+await verifyFromIsolatedWorkspace();

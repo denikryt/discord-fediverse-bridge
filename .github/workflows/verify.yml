@@ -30,6 +30,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # Fedify validates generated events against the real Python schema;
+      # each matrix job prepares its own environment on a separate runner.
+      - uses: actions/setup-python@v5
+        if: matrix.package == 'fedify-gateway'
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        if: matrix.package == 'fedify-gateway'
+      - name: Install Python contract dependencies
+        if: matrix.package == 'fedify-gateway'
+        working-directory: .
+        run: uv sync --frozen --extra dev
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run check
       - run: npm test
