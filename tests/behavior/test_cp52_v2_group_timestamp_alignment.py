@@ -231,3 +231,77 @@ def test_alignment_temporary_sqlite_is_private_before_first_open(tmp_path: Path,
         os.umask(old_umask)
     assert checked
     assert stat.S_IMODE(dest.stat().st_mode) == 0o600
+
+
+def test_alignment_rejects_existing_output_symlink_without_following_it(tmp_path: Path) -> None:
+    """An occupied output name, including a dangling symlink, is never an output destination."""
+    from scripts.align_dev_v2_group_view_timestamps import align
+
+    source = tmp_path / 'old.db'
+    _old_db(source)
+    source_before = source.read_bytes()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+
+    for target_exists in (False, True):
+        target = elsewhere / ('present.db' if target_exists else 'missing.db')
+        if target_exists:
+            target.write_bytes(b'existing destination data')
+        output = tmp_path / ('present-link.db' if target_exists else 'dangling-link.db')
+        output.symlink_to(target)
+        original_target = target.read_bytes() if target_exists else None
+
+        with pytest.raises((ValueError, FileExistsError), match='absent|exist'):
+            align(source, output)
+
+        assert output.is_symlink()
+        assert output.resolve() == target
+        assert (target.read_bytes() if target_exists else None) == original_target
+        assert target.exists() is target_exists
+        assert source.read_bytes() == source_before
+        assert not list(tmp_path.glob(output.name + '.partial-*'))
+
+
+def test_alignment_publish_rejects_racing_output_symlink(tmp_path: Path, monkeypatch) -> None:
+    """Late symlink creation cannot redirect publication outside the requested output path."""
+    import os
+    from scripts import align_dev_v2_group_view_timestamps as tool
+
+    source = tmp_path / 'old.db'
+    dest = tmp_path / 'aligned.db'
+    target = tmp_path / 'elsewhere' / 'outside.db'
+    target.parent.mkdir()
+    _old_db(source)
+    original_source = source.read_bytes()
+    real_link = os.link
+
+    def racing_symlink(partial, output):
+        """Introduce a dangling entry immediately before atomic publication."""
+        dest.symlink_to(target)
+        return real_link(partial, output)
+
+    monkeypatch.setattr(tool.os, 'link', racing_symlink)
+    with pytest.raises(FileExistsError):
+        tool.align(source, dest)
+    assert dest.is_symlink()
+    assert not target.exists()
+    assert source.read_bytes() == original_source
+    assert not list(tmp_path.glob('aligned.db.partial-*'))
+
+
+def test_alignment_allows_symlink_to_existing_parent_directory(tmp_path: Path) -> None:
+    """Normal directory aliases resolve while the final output filename stays exclusive."""
+    from scripts.align_dev_v2_group_view_timestamps import align
+
+    source = tmp_path / 'old.db'
+    _old_db(source)
+    directory = tmp_path / 'database-outputs'
+    directory.mkdir()
+    parent_alias = tmp_path / 'outputs-link'
+    parent_alias.symlink_to(directory, target_is_directory=True)
+    output = parent_alias / 'new.db'
+
+    assert align(source, output) is True
+    assert (directory / output.name).is_file()
+    with sqlite3.connect(directory / output.name) as db:
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 2

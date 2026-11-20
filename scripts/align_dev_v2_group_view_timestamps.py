@@ -106,8 +106,11 @@ def align(source: Path, output: Path) -> bool:
     must stop all application writers, retain a complete independent backup,
     and explicitly choose a new output path before deploying that output.
     """
-    source, output = source.resolve(), output.resolve()
-    if not source.is_file() or source == output or output.exists():
+    source = source.resolve()
+    # Resolve directory aliases without dereferencing the requested filename:
+    # even a dangling output symlink occupies that name and must be rejected.
+    output = output.parent.resolve() / output.name
+    if not source.is_file() or source == output or os.path.lexists(output):
         raise ValueError('source must exist and output must be a different absent file')
     previous, current = _reference_schemas()
     partial: Path | None = None
