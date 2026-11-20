@@ -307,3 +307,126 @@ async def test_same_note_in_two_groups_cannot_adopt_another_groups_root(tmp_path
             assert 'another Group' in claim.last_error
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_deleted_known_copy_is_cleaned_after_unsubscribe(tmp_path: Path) -> None:
+    """Cancelling a future distribution does not veto a committed old tombstone."""
+    from src.models import ChannelCommunitySubscription
+    db, repo, group_id = _setup(tmp_path)
+    try:
+        attempt = repo.reserve_remote_target(kind='post', group_id=group_id, discord_channel_id=10)
+        repo.finish_remote_target(kind='post', group_id=group_id, discord_channel_id=10,
+            attempt_id=attempt.attempt_id, discord_thread_id=201, discord_object_id=201)
+        with db.immediate_session() as session:
+            group = session.get(CommunityThreadGroup, group_id)
+            group.view_revision = 1
+            group.view_state = 'deleted'
+            session.scalar(select(ChannelCommunitySubscription)).status = 'cancelled'
+        transport = _Transport()
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=object(),
+            policy_service=_Policy(), transport=transport)
+        assert await worker.drain_once() == 1
+        assert transport.edited[0][0].view_state == 'deleted'
+        with db.session() as session:
+            assert session.scalar(select(CommunityDiscordTargetClaim)).applied_revision == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_message_404_completes_only_tombstone(tmp_path: Path) -> None:
+    """Discord 10008 proves a deleted copy is gone, but not a live Edit."""
+    db, repo, group_id = _setup(tmp_path)
+    try:
+        attempt = repo.reserve_remote_target(kind='post', group_id=group_id, discord_channel_id=10)
+        repo.finish_remote_target(kind='post', group_id=group_id, discord_channel_id=10,
+            attempt_id=attempt.attempt_id, discord_thread_id=201, discord_object_id=201)
+        with db.immediate_session() as session:
+            group = session.get(CommunityThreadGroup, group_id)
+            group.view_revision = 1
+            group.view_state = 'deleted'
+
+        class Missing(_Transport):
+            """Return the exact documented discord.py Unknown Message REST code."""
+            async def edit(self, claim):
+                """No bot-owned message survives at the recorded ID."""
+                self.edited.append((claim, _render(claim)))
+                error = RuntimeError('Unknown Message')
+                error.status, error.code = 404, 10008
+                raise error
+
+        transport = Missing()
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=object(),
+            policy_service=_Policy(), transport=transport)
+        assert await worker.drain_once() == 1
+        with db.session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim))
+            assert claim.applied_revision == 1 and claim.last_error is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_worker_rotates_past_newly_pending_early_claims(tmp_path: Path) -> None:
+    """Twenty busy destinations cannot indefinitely prevent delivery to #21."""
+    db, repo, _ = _setup(tmp_path)
+    try:
+        for index in range(21):
+            root = repo.get_or_create_remote_thread_group(
+                community_actor_id=GROUP, ap_object_id=f'{NOTE}/{index}',
+                source_owner_actor_id=OWNER, ap_activity_id=f'{NOTE}/{index}/create',
+                first_object_json={'ap_id': f'{NOTE}/{index}', 'kind': 'post',
+                                   'author_name': 'bob', 'body_markdown': 'First'})
+            r = repo.reserve_remote_target(kind='post', group_id=root.id, discord_channel_id=10)
+            repo.finish_remote_target(kind='post', group_id=root.id, discord_channel_id=10,
+                attempt_id=r.attempt_id, discord_thread_id=300+index, discord_object_id=300+index)
+        with db.immediate_session() as session:
+            for row in session.scalars(select(CommunityThreadGroup)):
+                row.view_revision = 1
+        transport = _Transport()
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=object(),
+            policy_service=_Policy(), transport=transport)
+        assert await worker.drain_once() == 20
+        with db.immediate_session() as session:
+            # Recurrent work at the front must not starve the last claim.
+            early_claims = list(session.scalars(select(CommunityDiscordTargetClaim).order_by(CommunityDiscordTargetClaim.id)))[:20]
+            for claim in early_claims:
+                session.get(CommunityThreadGroup, claim.thread_group_id).view_revision += 1
+        assert await worker.drain_once() >= 1
+        with db.session() as session:
+            claims = list(session.scalars(select(CommunityDiscordTargetClaim).order_by(CommunityDiscordTargetClaim.id)))
+            assert claims[-1].applied_revision == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_404_unknown_message_does_not_complete_live_update(tmp_path: Path) -> None:
+    """Only a committed Delete can interpret an absent Discord ID as success."""
+    db, repo, group_id = _setup(tmp_path)
+    try:
+        attempt = repo.reserve_remote_target(kind='post', group_id=group_id, discord_channel_id=10)
+        repo.finish_remote_target(kind='post', group_id=group_id, discord_channel_id=10,
+            attempt_id=attempt.attempt_id, discord_thread_id=201, discord_object_id=201)
+        with db.immediate_session() as session:
+            group = session.get(CommunityThreadGroup, group_id)
+            group.view_revision = 1
+            group.display_object_json = {**group.display_object_json, 'body_markdown': 'Changed'}
+
+        class MissingLive(_Transport):
+            """The remote Discord message has disappeared despite a live Group Note."""
+            async def edit(self, claim):
+                """Return a concrete Discord Unknown Message response."""
+                error = RuntimeError('Unknown Message')
+                error.status, error.code = 404, 10008
+                raise error
+
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=object(),
+            policy_service=_Policy(), transport=MissingLive())
+        assert await worker.drain_once() == 1
+        with db.session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim))
+            assert claim.applied_revision == 0 and claim.next_attempt_at is not None
+    finally:
+        db.close()

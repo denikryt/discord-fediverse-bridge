@@ -182,7 +182,13 @@ class UserActorFollowService:
         """
         parsed = urlparse(actor_id)
         fallback = parsed.path.rstrip('/').split('/')[-1]
-        candidate = re.sub(r'[^\w .-]', '', str(display_name or '')).strip()[:64]
+        raw = str(display_name or '').strip()
+        # A verified remote profile may already supply a qualified handle.
+        # Strip only the matching host; never append it to a different domain.
+        qualified = re.fullmatch(r'@?([\w.-]+)@([\w.-]+)', raw)
+        if qualified is not None:
+            raw = qualified.group(1) if qualified.group(2).lower() == (parsed.hostname or '').lower() else fallback
+        candidate = re.sub(r'[^\w .-]', '', raw).strip()[:64]
         if not candidate or candidate.lower().startswith(('everyone', 'here')):
             candidate = fallback
         if not parsed.hostname or not candidate:

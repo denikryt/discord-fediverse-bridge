@@ -17,6 +17,11 @@ from .formatting import (
 logger = logging.getLogger(__name__)
 
 
+class DiscordContentPreflightError(ValueError):
+    """Local rendering rejected an outbound Create before Discord REST began."""
+
+
+
 async def _fetch_ap_object(url: str) -> dict:
     """Fetch one ActivityPub object by URL and return its parsed JSON dict.
 
@@ -122,11 +127,16 @@ async def _create_inbound_discord_thread(
     """
     post = event.object
     title = format_thread_title_for_discord(post.title or "Untitled Lemmy Post")
-    body = render_remote_community_root(
-        actor_name=post.author_name, actor_id=event.actor_id,
-        object_id=post.ap_id, title=post.title,
-        body=post.body_markdown, external_url=post.url,
-    )
+    try:
+        body = render_remote_community_root(
+            actor_name=post.author_name, actor_id=event.actor_id,
+            object_id=post.ap_id, title=post.title,
+            body=post.body_markdown, external_url=post.url,
+        )
+    except ValueError as exc:
+        # Local layout validation is provably before create_thread. A timeout
+        # on the actual Discord call is handled separately by the runtime.
+        raise DiscordContentPreflightError(str(exc)) from exc
 
     result = await forum_channel.create_thread(name=title, content=body, suppress_embeds=True)
     thread = getattr(result, "thread", None)
@@ -168,10 +178,13 @@ async def _send_inbound_comment(
     The reference is already resolved by the caller via _resolve_inbound_reference.
     """
     comment = event.object
-    body = render_remote_community_comment(
-        actor_name=comment.author_name, actor_id=event.actor_id,
-        object_id=comment.ap_id, body=comment.body_markdown,
-    )
+    try:
+        body = render_remote_community_comment(
+            actor_name=comment.author_name, actor_id=event.actor_id,
+            object_id=comment.ap_id, body=comment.body_markdown,
+        )
+    except ValueError as exc:
+        raise DiscordContentPreflightError(str(exc)) from exc
     message = await thread.send(body, reference=reference, suppress_embeds=True)
     logger.info(
         "Created Discord message %s from ActivityPub comment %s",

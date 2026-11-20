@@ -138,11 +138,12 @@ class DiscordMessageMutationHandler:
                     channel_id=payload.channel_id,
                     message_id=payload.message_id,
                 )
-                if edited_timestamp is None:
-                    edited_timestamp = getattr(current_message, 'edited_at', None)
-                if not has_content:
-                    fetched_content = getattr(current_message, 'content', None)
-                    new_content = fetched_content if isinstance(fetched_content, str) else None
+                # A partial Gateway edit may describe an older version than
+                # the Discord GET. Use one authoritative body/timestamp pair;
+                # mixing their revisions can silently lose canonical edits.
+                edited_timestamp = getattr(current_message, 'edited_at', None)
+                fetched_content = getattr(current_message, 'content', None)
+                new_content = fetched_content if isinstance(fetched_content, str) else None
             except discord.HTTPException as exc:
                 logger.exception(
                     '[on_raw_message_edit] failed to reconcile partial edit msg=%s',

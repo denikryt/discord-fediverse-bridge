@@ -204,3 +204,60 @@ async def test_cancelled_follow_cannot_create_revision_but_old_receipt_still_rep
             assert len(session.scalars(select(ActivityPubEventReceipt)).all()) == 1
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_late_authenticated_update_never_replaces_newer_group_body(tmp_path: Path) -> None:
+    """A signed old Note.updated cannot rewind a later authenticated version."""
+    db, service = _setup(tmp_path / 'ordered.db')
+    try:
+        def timed(index: int, body: str, time: str) -> ActivityPubEvent:
+            """Keep a single signed body and source timestamp together."""
+            event = _update(index, body)
+            raw = dict(event.source_activity_json)
+            raw['object'] = {**raw['object'], 'updated': time}
+            return event.model_copy(update={'source_activity_json': raw})
+
+        new = timed(1, 'NEW', '2026-11-18T12:02:00Z')
+        old = timed(2, 'OLD', '2026-11-18T12:01:00Z')
+        assert (await service.apply(new)).revision == 1
+        assert (await service.apply(old)).status == 'processed'
+        with db.session() as session:
+            row = session.scalar(select(CommunityThreadGroup))
+            assert row.view_revision == 1
+            assert row.display_object_json['body_markdown'] == 'NEW'
+            assert len(session.scalars(select(ActivityPubEventReceipt)).all()) == 2
+        assert (await service.apply(old)).status == 'duplicate'
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_untimed_group_updates_continue_in_commit_order(tmp_path: Path) -> None:
+    """Absence of an authenticated update timestamp must not block new content."""
+    db, service = _setup(tmp_path / 'untimed.db')
+    try:
+        await service.apply(_update(1, 'A'))
+        assert (await service.apply(_update(2, 'B'))).revision == 2
+        with db.session() as session:
+            row = session.scalar(select(CommunityThreadGroup))
+            assert row.display_object_json['body_markdown'] == 'B'
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_unzoned_group_update_timestamp_cannot_bypass_source_order(tmp_path: Path) -> None:
+    """An ambiguous datetime never becomes a trusted ordering authority."""
+    db, service = _setup(tmp_path / 'bad-time.db')
+    try:
+        event = _update(1, 'Unordered')
+        raw = dict(event.source_activity_json)
+        raw['object'] = {**raw['object'], 'updated': '2026-11-18T12:00:00'}
+        with pytest.raises(GroupMutationDenied, match='timezone'):
+            await service.apply(event.model_copy(update={'source_activity_json': raw}))
+        with db.session() as session:
+            assert session.scalar(select(CommunityThreadGroup)).view_revision == 0
+            assert session.scalars(select(ActivityPubEventReceipt)).all() == []
+    finally:
+        db.close()

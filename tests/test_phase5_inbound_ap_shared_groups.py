@@ -637,3 +637,90 @@ async def test_phase5_outbound_publish_does_not_create_post_link(
         comment_links = list(session.scalars(select(CommentLink)))
     assert len(post_links) == 0
     assert len(comment_links) == 0
+
+
+@pytest.mark.asyncio
+async def test_group_tombstone_after_channel_fetch_blocks_unstarted_create(tmp_path: Path) -> None:
+    """A Group Delete committed during preflight prevents a new Discord POST."""
+    from src.models import CommunityDiscordTargetClaim
+    from sqlalchemy import select
+    database = _database(tmp_path)
+    _accepted_subscription(database, channel_id=100)
+    forum = _fake_forum_channel(channel_id=100, thread_id=200, starter_message_id=300)
+    bot = _fake_bot(forum_channels={100: forum})
+    old_fetch = bot.fetch_forum_channel
+
+    async def delete_during_fetch(channel_id: int) -> object:
+        """Commit the tombstone while the network has not begun Create."""
+        fetched = await old_fetch(channel_id)
+        with database.immediate_session() as session:
+            group = session.scalar(select(CommunityThreadGroup))
+            group.view_state = 'deleted'
+            group.view_revision += 1
+        return fetched
+
+    from src.models import CommunityThreadGroup
+    bot.fetch_forum_channel = delete_during_fetch
+    runtime = _community_runtime(database, _publish_gateway(), bot=bot)
+    result = await runtime.handle_inbound_post(_fake_post_event(), SimpleNamespace(
+        database=database, bot=bot, community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database)))
+    forum.create_thread.assert_not_awaited()
+    with database.session() as session:
+        claim = session.scalar(select(CommunityDiscordTargetClaim))
+        assert claim.status == 'failed'
+    database.close()
+
+
+@pytest.mark.asyncio
+async def test_invalid_mandatory_root_footer_fails_before_discord_post(tmp_path: Path) -> None:
+    """A local renderer failure is proven unsent rather than unknown ACK."""
+    from src.models import CommunityDiscordTargetClaim
+    from sqlalchemy import select
+    database = _database(tmp_path)
+    _accepted_subscription(database, channel_id=100)
+    forum = _fake_forum_channel(channel_id=100, thread_id=200, starter_message_id=300)
+    bot = _fake_bot(forum_channels={100: forum})
+    runtime = _community_runtime(database, _publish_gateway(), bot=bot)
+    event = _fake_post_event(ap_id='https://remote.example/post/' + 'x' * 2100)
+    await runtime.handle_inbound_post(event, SimpleNamespace(
+        database=database, bot=bot, community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database)))
+    forum.create_thread.assert_not_awaited()
+    with database.session() as session:
+        claim = session.scalar(select(CommunityDiscordTargetClaim))
+        assert claim.status == 'failed' and claim.reconciliation_marker_version != 1
+    database.close()
+
+
+@pytest.mark.asyncio
+async def test_group_delete_during_thread_lookup_fences_unstarted_comment(tmp_path: Path) -> None:
+    """A subscribed reply cannot be posted after its Group tombstone committed."""
+    from sqlalchemy import select
+    from src.models import CommunityMessageGroup, CommunityDiscordTargetClaim
+    database = _database(tmp_path)
+    _accepted_subscription(database, channel_id=100)
+    _create_thread_group_for_inbound(database, channel_id=100, thread_id=200)
+    thread = _fake_thread(thread_id=200, sent_message_id=400)
+    bot = _fake_bot(threads={200: thread})
+    original = bot.get_thread_by_id
+
+    async def delete_during_lookup(thread_id: int) -> object:
+        """Commit the Group mutation while only the read-only GET has run."""
+        result = await original(thread_id)
+        with database.immediate_session() as session:
+            reply = session.scalar(select(CommunityMessageGroup))
+            reply.view_revision += 1
+            reply.view_state = 'deleted'
+        return result
+
+    bot.get_thread_by_id = delete_during_lookup
+    runtime = _community_runtime(database, _publish_gateway(), bot=bot)
+    await runtime.handle_inbound_comment(_fake_comment_event(), SimpleNamespace(
+        database=database, bot=bot, community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database)))
+    thread.send.assert_not_awaited()
+    with database.session() as session:
+        claim = session.scalar(select(CommunityDiscordTargetClaim))
+        assert claim.status == 'failed'
+    database.close()

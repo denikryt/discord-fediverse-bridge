@@ -216,7 +216,7 @@ class VersionTwoMigrationTests(unittest.TestCase):
         with sqlite3.connect(self.path) as connection:
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
             self.assertEqual(connection.execute(
-                "SELECT COUNT(*) FROM remote_person_channel_assignments").fetchone()[0], 2)
+                "SELECT COUNT(*) FROM remote_person_channel_assignments").fetchone()[0], 3)
         self.assertEqual(migrations.read_database_state(db.engine).profile, "ready_v2")
 
     def test_constraints_reject_invalid_or_duplicated_remote_identity(self) -> None:

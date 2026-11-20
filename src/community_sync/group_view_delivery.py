@@ -200,6 +200,9 @@ class CommunityGroupViewDeliveryWorker:
         self._wake = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._stopping = False
+        # Resume each drain after the most recently attempted claim instead of
+        # starving later targets behind frequently updated early destinations.
+        self._last_scanned_claim_id = 0
 
     def start(self) -> None:
         """Start only after the bot's Discord-ready barrier was opened."""
@@ -253,11 +256,14 @@ class CommunityGroupViewDeliveryWorker:
                     or not isinstance(group.display_object_json, dict)
                     or getattr(group, 'source_channel_id', None) is not None):
                 return None
-            if session.scalar(select(ChannelCommunitySubscription.id).where(
+            subscribed = session.scalar(select(ChannelCommunitySubscription.id).where(
                 ChannelCommunitySubscription.lemmy_community_actor_id == group.community_actor_id,
                 ChannelCommunitySubscription.discord_channel_id == claim.discord_channel_id,
                 ChannelCommunitySubscription.status == 'accepted',
-            )) is None:
+            )) is not None
+            if not subscribed and group.view_state != 'deleted':
+                # A revoked subscription forbids future live content. Already
+                # committed tombstones may still clean a proven old Discord ID.
                 return None
             if (not self.policy_service.federation_decision(group.source_owner_actor_id).allowed
                     or not self.policy_service.federation_decision(group.community_actor_id).allowed):
@@ -389,19 +395,22 @@ class CommunityGroupViewDeliveryWorker:
                 and claim.applied_revision >= group.view_revision) else now
 
     async def drain_once(self) -> int:
-        """Make bounded network progress past blocked/unresolved/failing rows."""
+        """Rotate a bounded number of network attempts across the due claims."""
         with self.database.session() as session:
             ids = list(session.scalars(select(CommunityDiscordTargetClaim.id).where(
                 CommunityDiscordTargetClaim.status.in_(('claimed', 'unknown', 'completed')),
             ).order_by(CommunityDiscordTargetClaim.id)))
+        after = [i for i in ids if i > self._last_scanned_claim_id]
+        before = [i for i in ids if i <= self._last_scanned_claim_id]
         attempted = 0
-        for claim_id in ids:
+        for claim_id in after + before:
             if attempted >= self.MAX_NETWORK_ACTIONS:
                 break
             snapshot = self._reserve_claim(claim_id)
             if snapshot is None:
                 continue
             attempted += 1
+            self._last_scanned_claim_id = claim_id
             try:
                 if snapshot.operation == 'reconcile':
                     result = await self.transport.reconcile(snapshot)
@@ -412,6 +421,14 @@ class CommunityGroupViewDeliveryWorker:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self._finish(snapshot, proven=None, error=str(exc))
-                logger.exception('Community Group view delivery failed for claim=%s', claim_id)
+                if (snapshot.operation == 'edit' and snapshot.view_state == 'deleted'
+                        and getattr(exc, 'status', None) == 404
+                        and getattr(exc, 'code', None) == 10008):
+                    # The exact known Discord message is already gone. That is
+                    # a successful cleanup of the committed Group tombstone;
+                    # unrelated 404s and live Update errors remain retryable.
+                    self._finish(snapshot, proven=None, error=None)
+                else:
+                    self._finish(snapshot, proven=None, error=str(exc))
+                    logger.exception('Community Group view delivery failed for claim=%s', claim_id)
         return attempted

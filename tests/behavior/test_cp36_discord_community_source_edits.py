@@ -277,3 +277,20 @@ async def test_new_starter_edit_admission_does_not_change_raw_delete_routing(tmp
         assert mutation.calls == [] and wake.calls == 0
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_partial_starter_uses_one_authoritative_body_timestamp_pair(tmp_path: Path) -> None:
+    """A partial raw event may not combine a stale timestamp with a newer GET."""
+    db, handler, _policy, mutation, _wake, edge = _setup(tmp_path)
+    try:
+        edge.source.content = 'Later authoritative content'
+        edge.source.edited_at = datetime(2026, 11, 19, 13, 25, tzinfo=timezone.utc)
+        await handler.handle_raw_message_edit(_event(has_content=False, time=EDITED))
+        assert mutation.calls[-1]['body_markdown'] == 'Later authoritative content'
+        assert mutation.calls[-1]['edited_timestamp'] == edge.source.edited_at
+        await handler.handle_raw_message_edit(_event(content='Stale raw content', time=None))
+        assert mutation.calls[-1]['body_markdown'] == 'Later authoritative content'
+        assert mutation.calls[-1]['edited_timestamp'] == edge.source.edited_at
+    finally:
+        db.close()

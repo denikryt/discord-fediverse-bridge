@@ -974,7 +974,7 @@ export async function buildLocalFollowRequestedEvent(
       remote_inbox_url: admittedInboxUrl,
       remote_shared_inbox_url: admittedSharedInboxUrl,
       ...(targetKind === "user" ? {
-        remote_actor_display_name: [remoteActor.preferredUsername, remoteActor.name]
+        remote_actor_display_name: [remoteActor?.preferredUsername, remoteActor?.name]
           .find((name): name is string => typeof name === "string" && name.trim().length > 0)
           ?.trim().slice(0, 256) ?? null,
       } : {}),

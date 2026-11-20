@@ -483,6 +483,45 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 "reserved", attempt_id, group.view_revision, dict(group.display_object_json)
             )
 
+    def confirm_remote_target_pre_send(
+        self, *, kind: str, group_id: int, discord_channel_id: int, attempt_id: str,
+    ) -> bool:
+        """Recheck the reserved Group revision immediately before Discord POST.
+
+        All read-only Discord channel/parent checks may suspend this caller.
+        A tombstone, revision advance, removed subscription or replaced attempt
+        during those awaits must suppress an unstarted outbound Create.
+        """
+        if kind not in ("post", "comment"):
+            raise ValueError("invalid remote target kind")
+        group_fk = (CommunityDiscordTargetClaim.thread_group_id if kind == "post"
+                    else CommunityDiscordTargetClaim.message_group_id)
+        with self.immediate_session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim).where(
+                group_fk == group_id,
+                CommunityDiscordTargetClaim.discord_channel_id == discord_channel_id,
+                CommunityDiscordTargetClaim.kind == kind,
+                CommunityDiscordTargetClaim.attempt_id == attempt_id,
+                CommunityDiscordTargetClaim.status == "claimed",
+            ))
+            if claim is None:
+                return False
+            group = session.get(CommunityThreadGroup if kind == "post"
+                                else CommunityMessageGroup, group_id)
+            still_allowed = (group is not None and group.view_state == "live"
+                and group.view_revision == claim.reserved_view_revision
+                and session.scalar(select(ChannelCommunitySubscription.id).where(
+                    ChannelCommunitySubscription.discord_channel_id == discord_channel_id,
+                    ChannelCommunitySubscription.lemmy_community_actor_id == group.community_actor_id,
+                    ChannelCommunitySubscription.status == "accepted",
+                )) is not None)
+            if not still_allowed:
+                # This attempt has not crossed the POST boundary, so failure
+                # (not unknown) can be re-reserved against a newer live view.
+                claim.status = "failed"
+                claim.reconciliation_marker_version = None
+            return still_allowed
+
     def finish_remote_target(
         self, *, kind: str, group_id: int, discord_channel_id: int, attempt_id: str,
         discord_thread_id: int, discord_object_id: int,
@@ -519,6 +558,10 @@ class DiscordFanoutGroupRepository(BaseRepository):
         with self.immediate_session() as session:
             claim = self._claimed_target(session, kind, group_id, discord_channel_id, attempt_id)
             claim.status = status
+            if status == "failed":
+                # A proven pre-send failure never has a Discord history marker
+                # worth reconciling; the next reservation builds a fresh one.
+                claim.reconciliation_marker_version = None
 
     @staticmethod
     def _claimed_target(session, kind: str, group_id: int, channel_id: int, attempt_id: str):

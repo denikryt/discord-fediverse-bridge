@@ -193,17 +193,19 @@ def _fit_feed_body(body: str, budget: int) -> str:
         else:
             protected.append((start, end))
 
+    protected_ends = {end for _start, end in protected}
+
     def assemble(ranges: list[tuple[int, int]]) -> str:
-        """Mark precisely the holes between retained source intervals."""
+        """Mark holes without turning an omitted suffix into part of a URL."""
         result: list[str] = []
         position = 0
         for start, end in sorted(ranges):
             if start > position:
-                result.append('…')
+                result.append(' …' if position in protected_ends else '…')
             result.append(body[start:end])
             position = end
         if position < len(body):
-            result.append('…')
+            result.append(' …' if position in protected_ends else '…')
         return ''.join(result)
 
     retained: list[tuple[int, int]] = []
@@ -307,7 +309,7 @@ def render_remote_community_root(*, actor_name: str, actor_id: str,
     if external_url and external_url != identity:
         text = f'{text}\n\n{external_url}' if text else external_url
     return render_feed_discord_message(
-        header=f'**{title or "Untitled Lemmy Post"}**\nAuthor: {author}',
+        header=f'**{title or "Untitled Lemmy Post"}**\n\nAuthor: {author}',
         body=text, footer=identity,
     )
 

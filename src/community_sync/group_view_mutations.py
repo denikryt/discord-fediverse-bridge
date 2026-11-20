@@ -112,6 +112,29 @@ def _fingerprint(event: ActivityPubEvent) -> str:
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
+
+def _authenticated_update_time(source: dict[str, Any]) -> datetime | None:
+    """Read the signed Note.updated instant, or the signed activity timestamp.
+
+    A timezone-free timestamp is not an ActivityPub instant. It must not
+    bypass ordering by being silently interpreted as local system time.
+    """
+    obj = source.get('object')
+    value = (obj.get('updated') if isinstance(obj, dict) else None) or source.get('updated')
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise GroupMutationDenied('Group Update timestamp is not an RFC3339 string')
+    try:
+        instant = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError as exc:
+        raise GroupMutationDenied('invalid Group Update timestamp') from exc
+    if instant.tzinfo is None or instant.utcoffset() is None:
+        raise GroupMutationDenied('Group Update timestamp lacks timezone offset')
+    return instant.astimezone(timezone.utc)
+
+
+
 def _first_create_verified(group: object, *, kind: str) -> bool:
     """Require retained author, exact object and immutable original Note kind."""
     saved = getattr(group, 'inbound_create_snapshot_json', None)
@@ -348,12 +371,24 @@ class GroupViewMutationService:
                 verified_rows.append(group_row)
             if not verified_rows:
                 raise GroupMutationDenied('no verified Group view admitted for this Activity')
+            # The timestamp is part of the authenticated inner Update, not the
+            # moment this bridge happened to receive a delayed Announce.
+            source_time = (_authenticated_update_time(event.source_activity_json)
+                           if event.event_type.endswith('.updated') else None)
             changed = 0
             for group_row in verified_rows:
                 if group_row.view_state == 'deleted':
                     # A Group-specific tombstone is terminal even for later
                     # author-signed Updates or an out-of-order old Activity.
                     continue
+                if source_time is not None and group_row.view_updated_at is not None:
+                    prior_time = group_row.view_updated_at
+                    if prior_time.tzinfo is None:
+                        prior_time = prior_time.replace(tzinfo=timezone.utc)
+                    if source_time <= prior_time.astimezone(timezone.utc):
+                        # Retain the receipt for this authenticated wire ID, but
+                        # do not let a delayed older Note restore stale text.
+                        continue
                 if event.event_type.endswith('.deleted'):
                     group_row.view_state = 'deleted'
                 else:
@@ -366,7 +401,7 @@ class GroupViewMutationService:
                         updated['title'] = event.object.title
                     group_row.display_object_json = updated
                 group_row.view_revision += 1
-                group_row.view_updated_at = datetime.now(timezone.utc)
+                group_row.view_updated_at = source_time or datetime.now(timezone.utc)
                 group_row.last_view_activity_id = event.source_activity_id or event.delivery_id
                 changed += 1
             detail = 'Group view committed' if changed else 'Group object already deleted'

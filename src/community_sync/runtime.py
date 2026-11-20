@@ -304,7 +304,7 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
         from ..db.repositories.discord_fanout_groups import RemoteCommunityGroupConflict
-        from ..bridge_lemmy_to_discord import _create_inbound_discord_thread
+        from ..bridge_lemmy_to_discord import _create_inbound_discord_thread, DiscordContentPreflightError
 
         try:
             owner = self._inbound_owner(event)
@@ -375,6 +375,14 @@ class CommunityRuntime:
                 logger.exception("Remote post Discord bot not ready: group=%s target=%s",
                                  thread_group.id, channel)
                 continue
+            # A Group Delete/Update can commit during the preceding awaits.
+            # Revalidate the original reserved revision immediately before
+            # crossing the Discord Create boundary, without holding a lock
+            # over any network call.
+            if not repository.confirm_remote_target_pre_send(
+                    kind="post", group_id=thread_group.id, discord_channel_id=channel,
+                    attempt_id=attempt):
+                continue
             try:
                 thread_id, starter_id = await _create_inbound_discord_thread(
                     forum_channel=forum, event=canonical_event
@@ -383,6 +391,11 @@ class CommunityRuntime:
                     discord_channel_id=channel, attempt_id=attempt,
                     discord_thread_id=thread_id, discord_object_id=starter_id)
                 delivered += 1
+            except DiscordContentPreflightError:
+                repository.mark_remote_target(kind="post", group_id=thread_group.id,
+                    discord_channel_id=channel, attempt_id=attempt, status="failed")
+                logger.exception("Remote post was invalid before Discord REST: group=%s target=%s",
+                                 thread_group.id, channel)
             except Exception:
                 # Even if the response was lost, the remote Discord call may have
                 # succeeded. Never classify this outcome as safely retryable.
@@ -419,7 +432,7 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
         from ..db.repositories.discord_fanout_groups import RemoteCommunityGroupConflict
-        from ..bridge_lemmy_to_discord import _send_inbound_comment
+        from ..bridge_lemmy_to_discord import _send_inbound_comment, DiscordContentPreflightError
 
         try:
             owner = self._inbound_owner(event)
@@ -523,12 +536,23 @@ class CommunityRuntime:
                 logger.exception("Remote reply unavailable before Discord REST: group=%s channel=%s",
                                  message_group.id, channel)
                 continue
+            # Discord thread resolution and reply-reference lookup can suspend
+            # this attempt while a Group Delete commits. Recheck before send.
+            if not repository.confirm_remote_target_pre_send(
+                    kind="comment", group_id=message_group.id, discord_channel_id=channel,
+                    attempt_id=attempt):
+                continue
             try:
                 message = await _send_inbound_comment(thread=thread, event=canonical_event, reference=reference)
                 repository.finish_remote_target(kind="comment", group_id=message_group.id,
                     discord_channel_id=channel, attempt_id=attempt,
                     discord_thread_id=delivery.discord_thread_id, discord_object_id=message.id)
                 delivered += 1
+            except DiscordContentPreflightError:
+                repository.mark_remote_target(kind="comment", group_id=message_group.id,
+                    discord_channel_id=channel, attempt_id=attempt, status="failed")
+                logger.exception("Remote reply was invalid before Discord REST: group=%s channel=%s",
+                                 message_group.id, channel)
             except Exception:
                 repository.mark_remote_target(kind="comment", group_id=message_group.id,
                     discord_channel_id=channel, attempt_id=attempt, status="unknown")

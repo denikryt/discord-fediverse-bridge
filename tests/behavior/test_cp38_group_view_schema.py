@@ -159,3 +159,17 @@ def test_community_identity_markers_survive_truncation_and_do_not_match_prefix()
     assert not has_feed_comment_identity(comment, POST+'0')
     with pytest.raises(ValueError):
         render_feed_discord_message(header='H', body='X', footer='https://x.example/'+'x'*2100)
+
+
+def test_feed_middle_omission_does_not_append_ellipsis_to_raw_url() -> None:
+    """The visible URL token must remain byte-for-byte equal to its source."""
+    from src.formatting import render_remote_community_root, _feed_protected_spans
+    url = 'https://reference.example/story'
+    content = render_remote_community_root(
+        actor_name='bob', actor_id=AUTHOR, object_id=POST,
+        title='Title', body='x' * 2300 + ' ' + url + ' ' + 'y' * 100,
+        external_url=None)
+    assert len(content.encode('utf-16-le')) // 2 <= 2000
+    assert url in content
+    assert url + '…' not in content
+    assert content.splitlines()[-1] == POST

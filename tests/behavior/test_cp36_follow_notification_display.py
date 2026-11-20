@@ -88,6 +88,7 @@ class FollowNotificationDisplayTests(unittest.TestCase):
         label = self.service._remote_label
         self.assertEqual(label(ACTOR), '@2@space.nachitima.com')
         self.assertEqual(label(ACTOR, 'nachitima'), '@nachitima@space.nachitima.com')
+        self.assertEqual(label(ACTOR, '@nachitima@space.nachitima.com'), '@nachitima@space.nachitima.com')
         self.assertEqual(label(ACTOR, '@everyone\n<@123>'), '@2@space.nachitima.com')
         self.assertLessEqual(len(label(ACTOR, '🦊' * 200 + 'hello')), 90)
         self.assertEqual(label(ACTOR, 'everyone'), '@2@space.nachitima.com')
