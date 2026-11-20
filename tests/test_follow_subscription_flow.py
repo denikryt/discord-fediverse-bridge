@@ -1,7 +1,7 @@
 """Runtime-oriented follow lifecycle scenarios for local subscriber participation subscriptions."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from datetime import UTC, datetime
 from pathlib import Path

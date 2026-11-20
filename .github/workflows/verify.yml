@@ -1,0 +1,57 @@
+name: Verify bridge and connector builds
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen --extra dev
+      - run: uv run --frozen --extra dev pytest -q
+  node:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [fluxer-connector, fedify-gateway]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Fedify validates generated events against the real Python schema;
+      # each matrix job prepares its own environment on a separate runner.
+      - uses: actions/setup-python@v5
+        if: matrix.package == 'fedify-gateway'
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        if: matrix.package == 'fedify-gateway'
+      - name: Install Python contract dependencies
+        if: matrix.package == 'fedify-gateway'
+        working-directory: .
+        run: uv sync --frozen --extra dev
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - run: npm test
+  containers:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dockerfile: [Dockerfile, fedify-gateway/Dockerfile, fluxer-connector/Dockerfile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Building the Fluxer Dockerfile runs its lock, tsc and SDK tests on Node 22.
+      - run: docker build --file '${{ matrix.dockerfile }}' --tag bridge-verification .

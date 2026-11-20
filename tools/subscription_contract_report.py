@@ -27,7 +27,7 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     add_project_import_paths(root)
 
-    from support.subscription_contracts import (
+    from bridge_test_support.subscription_contracts import (
         SubscriptionCase,
         REQUIRED_SUBSCRIPTION_RULES,
     )

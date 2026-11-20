@@ -19,3 +19,6 @@ notes
 .mypy_cache
 .coverage
 htmlcov
+
+fluxer-connector/node_modules
+secrets

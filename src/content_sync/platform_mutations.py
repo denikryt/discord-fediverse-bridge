@@ -25,6 +25,7 @@ from ..models import (
     LocalSubscriber, PlatformConnector,
 )
 from ..platform_types import ContentDocument, MessageRef, MessageView
+from .platform_delivery_scheduler import DispatchAdmissionClosed
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,24 @@ class PhysicalMutationClaim:
     content: ContentDocument | None
 
 
+@dataclass(frozen=True, slots=True)
+class PhysicalMutationCandidate:
+    """Read-only snapshot; this object carries no durable dispatch authority."""
+
+    domain: str
+    kind: str
+    copy_id: int
+    connector_key: str
+    revision: int
+    applied_revision: int | None
+    surface_id: int
+    message: MessageRef
+    deleted: bool
+    content_json: str | None
+    content: ContentDocument | None
+    render_error: str | None = None
+
+
 class PlatformPhysicalMutationCoordinator:
     """Claim, dispatch and CAS-settle edits/deletes through typed platform ports.
 
@@ -66,6 +85,7 @@ class PlatformPhysicalMutationCoordinator:
         target_policy: Callable[[str, int], bool],
         content_renderer: Callable[[str, str, dict], ContentDocument] | None = None,
         tombstone_renderer: Callable[[str, str], ContentDocument] | None = None,
+        dispatch_gate=None,
     ) -> None:
         """Bind the durable database, connector registry and authorization edges."""
         self.database = database
@@ -73,6 +93,12 @@ class PlatformPhysicalMutationCoordinator:
         self.target_policy = target_policy
         self.content_renderer = content_renderer
         self.tombstone_renderer = tombstone_renderer
+        self.dispatch_gate = dispatch_gate
+        # Fair, bounded read-only scanning across four existing copy families.
+        # Per-connector/family bounded SQL pagination, not a private work queue.
+        # The cursor advances after each 32-row read, even past settled rows.
+        self._scan_cursor: dict[tuple[str | None, int], int] = {}
+        self._family_rotation: dict[str | None, int] = {}
 
     @staticmethod
     def _current_owner(session, domain: str, canonical, surface: ChannelSurface, copy) -> bool:
@@ -149,114 +175,222 @@ class PlatformPhysicalMutationCoordinator:
                 return None
         return MessageRef(connector_key, container, message_id)
 
-    @staticmethod
-    def _record_invalid_content(copy, revision: int, reason: str) -> None:
-        """Persist a definite pre-I/O render refusal on this copy only.
-
-        The authoritative canonical snapshot is unrenderable at this revision,
-        but other physical targets and domains must continue. A *new*
-        canonical revision can reopen rendering without inventing an ACK.
-        """
-        copy.mutation_state = 'failed_definite'
-        copy.mutation_target_revision = revision
-        copy.mutation_claim_token = None
-        copy.mutation_lease_until = None
-        copy.mutation_last_error = ('invalid canonical content: ' + reason)[:512]
-        logger.warning('Physical mutation refused before I/O: %s', copy.mutation_last_error)
-
-    def _claim_due(self, limit: int) -> list[PhysicalMutationClaim]:
-        """Exclusively reserve settled, lagging physical copies in one writer."""
-        # A zero-capacity scheduler tick must not reserve or send work.
-        if limit <= 0:
-            return []
+    def _expire_abandoned_claims(self) -> None:
+        """Fence abandoned *previously claimed* writes, not read-only candidates."""
         now = datetime.now(timezone.utc)
-        claimed: list[PhysicalMutationClaim] = []
         with self.database.immediate_session() as session:
-            for domain, kind, copy_model, canonical_model, canonical_field in _COPY_MODELS:
-                # An expired dispatch could have reached the provider: never
-                # reclaim it as if it were a provably unsent retry.
-                session.execute(update(copy_model).where(
-                    copy_model.mutation_state == 'dispatching',
-                    copy_model.mutation_lease_until < now,
+            for _domain, _kind, model, _canonical, _field in _COPY_MODELS:
+                session.execute(update(model).where(
+                    model.mutation_state == 'dispatching',
+                    model.mutation_lease_until < now,
                 ).values(mutation_state='unresolved',
                          mutation_last_error='expired mutation claim: outcome unknown'))
-                # Most rows are already up-to-date or owned by other surfaces.
-                # Limiting the *candidates* would permanently starve higher-ID
-                # copies: bound claimed work instead and page past ineligible
-                # rows using the stable primary key under this writer lock.
-                last_id = 0
-                while True:
-                    copies = session.scalars(select(copy_model).where(
-                        copy_model.mutation_state.in_(('idle', 'pending', 'failed_definite')),
-                        copy_model.id > last_id,
-                    ).order_by(copy_model.id).limit(min(256, max(32, limit * 8)))).all()
-                    if not copies:
-                        break
-                    last_id = copies[-1].id
-                    for copy in copies:
-                        canonical = session.get(canonical_model, getattr(copy, canonical_field))
-                        surface = session.get(ChannelSurface, copy.channel_surface_id)
-                        connector = session.get(PlatformConnector, copy.connector_id)
-                        if (canonical is None or surface is None or connector is None
-                            or surface.connector_id != copy.connector_id
-                            or not self._current_owner(session, domain, canonical, surface, copy)):
+
+    def _discover_due(self, *, connector_key: str | None = None,
+                      excluded: set[tuple[str, str, int]] | None = None
+                      ) -> list[PhysicalMutationCandidate]:
+        """Read at most one 32-row SQLite page per family in a single sweep.
+
+        Cursors belong to this runtime/connector only and may reset on restart;
+        they never authorize a write or bypass the durable unknown-effect fence.
+        """
+        excluded = excluded or set()
+        due: list[PhysicalMutationCandidate] = []
+        start_family = self._family_rotation.get(connector_key, 0)
+        with self.database.session() as session:
+            for offset in range(len(_COPY_MODELS)):
+                family_index = (start_family + offset) % len(_COPY_MODELS)
+                domain, kind, model, canonical_model, field = _COPY_MODELS[family_index]
+                cursor_key = (connector_key, family_index)
+                last_id = self._scan_cursor.get(cursor_key, 0)
+                # Filter *before* LIMIT so 32 low-ID Discord copies cannot
+                # starve a Fluxer lane (or vice versa) on every scheduler tick.
+                # This remains a read-only query; no mutation is reserved yet.
+                scope = (model.connector_id.in_(
+                    select(PlatformConnector.id).where(
+                        PlatformConnector.connector_key == connector_key
+                    )) if connector_key is not None else True)
+                query = select(model).where(
+                    model.mutation_state.in_(('idle', 'pending', 'failed_definite')),
+                    model.id > last_id,
+                    scope,
+                ).order_by(model.id).limit(32)
+                copies = session.scalars(query).all()
+                if not copies and last_id:
+                    # Wrap on a later sweep; do not spin within one call.
+                    last_id = 0
+                    self._scan_cursor[cursor_key] = 0
+                    copies = session.scalars(select(model).where(
+                        model.mutation_state.in_(('idle', 'pending', 'failed_definite')),
+                        scope,
+                    ).order_by(model.id).limit(32)).all()
+                if not copies:
+                    continue
+                for copy in copies:
+                    if (domain, kind, copy.id) in excluded:
+                        continue
+                    canonical = session.get(canonical_model, getattr(copy, field))
+                    surface = session.get(ChannelSurface, copy.channel_surface_id)
+                    connector = session.get(PlatformConnector, copy.connector_id)
+                    if (canonical is None or surface is None or connector is None
+                        or (connector_key is not None and connector.connector_key != connector_key)
+                        or surface.connector_id != copy.connector_id
+                        or not self._current_owner(session, domain, canonical, surface, copy)):
+                        continue
+                    revision = canonical.content_revision
+                    if revision == 0 and canonical.deleted_at is None:
+                        continue
+                    if copy.applied_revision is not None and copy.applied_revision >= revision:
+                        continue
+                    if (copy.mutation_state == 'failed_definite'
+                        and copy.mutation_target_revision == revision):
+                        # A known-unsent definitive refusal is durable. Only
+                        # a new revision or explicit policy revalidation may
+                        # readmit this same copy for physical writes.
+                        continue
+                    message = self._physical_target(session, domain, kind, canonical, copy,
+                                                    connector.connector_key)
+                    if message is None:
+                        continue
+                    content = None
+                    render_error = None
+                    if canonical.deleted_at is None:
+                        if self.content_renderer is None or not canonical.current_content_json:
                             continue
-                        revision = canonical.content_revision
-                        if revision == 0 and canonical.deleted_at is None:
-                            # Released-v0 history does not prove which old body was
-                            # applied. Wait for a verified new content revision.
-                            continue
-                        if copy.applied_revision is not None and copy.applied_revision >= revision:
-                            continue
-                        # A deterministic render or ownership refusal is not a
-                        # transport retry. Do not busy-loop on the same invalid
-                        # canonical snapshot/ownership; a new revision or operator
-                        # inspection can re-open admission.
-                        if (copy.mutation_state == 'failed_definite'
-                            and copy.mutation_target_revision == revision
-                            and (copy.mutation_last_error or '').startswith((
-                                'invalid canonical content: ', 'unverified physical ownership: '))):
-                            continue
-                        message = self._physical_target(session, domain, kind, canonical, copy, connector.connector_key)
-                        if message is None:
-                            continue
-                        content = None
-                        if canonical.deleted_at is None:
-                            if self.content_renderer is None or not canonical.current_content_json:
-                                continue
-                            try:
-                                snapshot = json.loads(canonical.current_content_json)
-                            except (TypeError, ValueError) as exc:
-                                self._record_invalid_content(copy, revision, str(exc))
-                                continue
+                        try:
+                            snapshot = json.loads(canonical.current_content_json)
                             if (not isinstance(snapshot, dict) or snapshot.get('schemaVersion') != 1
                                 or snapshot.get('kind') != kind
                                 or snapshot.get('apObjectId') != canonical.ap_object_id
                                 or not isinstance(snapshot.get('bodyMarkdown'), str)):
-                                self._record_invalid_content(copy, revision, 'mismatched canonical content identity or shape')
-                                continue
-                            try:
-                                content = self.content_renderer(domain, kind, snapshot)
-                                if not isinstance(content, ContentDocument):
-                                    raise ValueError('domain mutation renderer must return ContentDocument')
-                            except (TypeError, ValueError, KeyError) as exc:
-                                # A pure domain formatter cannot affect the
-                                # transport of another verified physical copy.
-                                self._record_invalid_content(copy, revision, str(exc))
-                                continue
-                        copy.mutation_state = 'dispatching'
-                        copy.mutation_target_revision = revision
-                        copy.mutation_claim_token = secrets.token_hex(16)
-                        copy.mutation_lease_until = now + timedelta(seconds=120)
-                        copy.mutation_last_error = None
-                        claimed.append(PhysicalMutationClaim(
-                            domain, kind, copy.id, copy.mutation_claim_token,
-                            revision, copy.channel_surface_id, message,
-                            canonical.deleted_at is not None, content,
-                        ))
-                        if len(claimed) >= limit:
-                            return claimed
-        return claimed
+                                raise ValueError('mismatched canonical content identity or shape')
+                            content = self.content_renderer(domain, kind, snapshot)
+                            if not isinstance(content, ContentDocument):
+                                raise ValueError('domain mutation renderer must return ContentDocument')
+                        except (TypeError, ValueError, KeyError) as exc:
+                            # Rejected work is not a claim and cannot strand
+                            # its siblings; scan later copies in this sweep.
+                            render_error = 'invalid canonical content: ' + str(exc)
+                    due.append(PhysicalMutationCandidate(
+                        domain, kind, copy.id, connector.connector_key, revision,
+                        copy.applied_revision, copy.channel_surface_id, message,
+                        canonical.deleted_at is not None,
+                        canonical.current_content_json, content, render_error,
+                    ))
+                    if len(due) >= 32:
+                        self._scan_cursor[cursor_key] = copy.id
+                        self._family_rotation[connector_key] = (family_index + 1) % len(_COPY_MODELS)
+                        return due
+                # The next tick continues beyond this page; later families
+                # still get a bounded opportunity within the current tick.
+                self._scan_cursor[cursor_key] = copies[-1].id
+        self._family_rotation[connector_key] = (start_family + 1) % len(_COPY_MODELS)
+        return due
+
+    def _claim_one(self, candidate: PhysicalMutationCandidate) -> PhysicalMutationClaim | None:
+        """CAS-reserve one already-vetted candidate immediately before I/O.
+
+        The full physical target, canonical content/revision and copy's applied
+        revision must still equal the read-only snapshot under the writer lock.
+        """
+        descriptor = next(spec for spec in _COPY_MODELS
+                          if spec[0] == candidate.domain and spec[1] == candidate.kind)
+        _domain, _kind, model, canonical_model, field = descriptor
+        with self.database.immediate_session() as session:
+            copy = session.get(model, candidate.copy_id)
+            if (copy is None or copy.mutation_state not in ('idle', 'pending', 'failed_definite')
+                or copy.applied_revision != candidate.applied_revision
+                or copy.channel_surface_id != candidate.surface_id):
+                return None
+            canonical = session.get(canonical_model, getattr(copy, field))
+            surface = session.get(ChannelSurface, copy.channel_surface_id)
+            connector = session.get(PlatformConnector, copy.connector_id)
+            if (canonical is None or surface is None or connector is None
+                or connector.connector_key != candidate.connector_key
+                or surface.connector_id != copy.connector_id
+                or canonical.content_revision != candidate.revision
+                or canonical.current_content_json != candidate.content_json
+                or (canonical.deleted_at is not None) != candidate.deleted
+                or not self._current_owner(session, candidate.domain, canonical, surface, copy)
+                or self._physical_target(session, candidate.domain, candidate.kind,
+                                         canonical, copy, connector.connector_key) != candidate.message):
+                return None
+            if copy.applied_revision is not None and copy.applied_revision >= candidate.revision:
+                return None
+            if (copy.mutation_state == 'failed_definite'
+                and copy.mutation_target_revision == candidate.revision):
+                return None
+            token = secrets.token_hex(16)
+            copy.mutation_state = 'dispatching'
+            copy.mutation_target_revision = candidate.revision
+            copy.mutation_claim_token = token
+            copy.mutation_lease_until = datetime.now(timezone.utc) + timedelta(seconds=120)
+            copy.mutation_last_error = None
+            return PhysicalMutationClaim(
+                candidate.domain, candidate.kind, copy.id, token, candidate.revision,
+                candidate.surface_id, candidate.message, candidate.deleted, candidate.content,
+            )
+
+    def _record_preflight_refusal(self, candidate: PhysicalMutationCandidate, reason: str) -> None:
+        """Record a known-unsent refusal only if the original revision is current."""
+        descriptor = next(spec for spec in _COPY_MODELS
+                          if spec[0] == candidate.domain and spec[1] == candidate.kind)
+        model, canonical_model, field = descriptor[2:]
+        with self.database.immediate_session() as session:
+            copy = session.get(model, candidate.copy_id)
+            if copy is None or copy.mutation_state not in ('idle', 'pending', 'failed_definite'):
+                return
+            canonical = session.get(canonical_model, getattr(copy, field))
+            if (canonical is None or canonical.content_revision != candidate.revision
+                or copy.applied_revision != candidate.applied_revision):
+                return
+            copy.mutation_state = 'failed_definite'
+            copy.mutation_target_revision = candidate.revision
+            copy.mutation_claim_token = None
+            copy.mutation_lease_until = None
+            copy.mutation_last_error = reason[:512]
+
+    def readmit_failed_revision(self, *, domain: str, kind: str, copy_id: int,
+                                connector_key: str, revision: int) -> bool:
+        """Readmit an exact known-unsent refusal after explicit policy review.
+
+        This is an operator/policy revalidation boundary, not a scheduler retry.
+        A new canonical revision is independently eligible without this call.
+        """
+        if not any((dom, typ) == (domain, kind) for dom, typ, *_ in _COPY_MODELS):
+            return False
+        descriptor = next(spec for spec in _COPY_MODELS
+                          if spec[0] == domain and spec[1] == kind)
+        _, _, model, canonical_model, field = descriptor
+        with self.database.session() as session:
+            copy = session.get(model, copy_id)
+            if copy is None:
+                return False
+            surface_id = copy.channel_surface_id
+        # Operator review must authorize the current policy *outside* the
+        # SQLite writer; the writer then checks exact identity and revision.
+        if not self.target_policy(connector_key, surface_id):
+            return False
+        with self.database.immediate_session() as session:
+            copy = session.get(model, copy_id)
+            if (copy is None or copy.channel_surface_id != surface_id
+                or copy.mutation_state != 'failed_definite'
+                or copy.mutation_target_revision != revision
+                or copy.mutation_claim_token is not None):
+                return False
+            canonical = session.get(canonical_model, getattr(copy, field))
+            surface = session.get(ChannelSurface, surface_id)
+            connector = session.get(PlatformConnector, copy.connector_id)
+            if (canonical is None or surface is None or connector is None
+                or connector.connector_key != connector_key
+                or surface.connector_id != connector.id
+                or canonical.content_revision != revision
+                or not self._current_owner(session, domain, canonical, surface, copy)):
+                return False
+            copy.mutation_state = 'pending'
+            copy.mutation_target_revision = None
+            copy.mutation_last_error = None
+            return True
 
     def _revalidate(self, claim: PhysicalMutationClaim) -> bool:
         """Check exact attempt, copy owner and target before transport begins."""
@@ -307,48 +441,117 @@ class PlatformPhysicalMutationCoordinator:
             copy.mutation_lease_until = None
             return True
 
-    async def drain(self, *, limit: int = 32) -> int:
-        """Send only newly claimed updates/deletes; never retry unknown writes."""
-        claims = self._claim_due(limit)
-        for index, claim in enumerate(claims):
-            # Only crossing the adapter method boundary can have a physical
-            # effect. Registry/policy lookup and pure rendering exceptions are
-            # provably pre-send; an adapter exception is never proof of non-send.
+    async def drain(self, *, limit: int = 32, connector_key: str | None = None) -> int:
+        """Use the shared per-connector slot for both immediate and recovery work.
+
+        A direct drain without a connector is restricted to configured runtime
+        connectors, not admitted through a separate global physical sender.
+        """
+        if self.dispatch_gate is None:
+            return await self._drain_admitted(limit=limit, connector_key=connector_key)
+        if limit <= 0:
+            return 0
+        keys = ((connector_key,) if connector_key is not None
+                else self.dispatch_gate.connector_keys)
+        completed = 0
+        for key in keys:
+            if completed >= limit:
+                break
+            try:
+                async with self.dispatch_gate.slot(key):
+                    completed += await self._drain_admitted(
+                        limit=limit-completed, connector_key=key,
+                    )
+            except (LookupError, DispatchAdmissionClosed):
+                # Quiescing/unconfigured connectors cannot obtain dispatch
+                # authority. Leave their SQLite candidates untouched.
+                continue
+        return completed
+
+    async def _drain_admitted(self, *, limit: int = 32,
+                              connector_key: str | None = None) -> int:
+        """Preflight without claims, then claim just one copy per available slot.
+
+        Per-sweep attempted identities prevent a low-ID refusal from starving a
+        higher-ID copy. A caller's connector lane supplies exclusive capacity;
+        the durable claim itself remains owned by the existing SQLite rows.
+        """
+        if limit <= 0:
+            return 0
+        self._expire_abandoned_claims()
+        attempted: set[tuple[str, str, int]] = set()
+        claimed = 0
+        for candidate in self._discover_due(connector_key=connector_key):
+            if claimed >= limit:
+                break
+            key = (candidate.domain, candidate.kind, candidate.copy_id)
+            if key in attempted:
+                continue
+            attempted.add(key)
+            if candidate.render_error is not None:
+                self._record_preflight_refusal(candidate, candidate.render_error)
+                continue
+            # All lookups below may await or fail. None grants dispatch authority.
+            # They happen BEFORE any durable mutation reservation.
+            try:
+                adapter = self.registry.get(candidate.connector_key)
+                ready = (getattr(adapter, 'dispatch_ready', None)
+                         or getattr(adapter, 'is_ready', None))
+                if ready is not None and not ready():
+                    continue
+                if not self.target_policy(candidate.connector_key, candidate.surface_id):
+                    self._record_preflight_refusal(candidate, 'revoked before transport')
+                    continue
+                view = await adapter.fetch_message(candidate.message)
+                if (not isinstance(view, MessageView) or view.message != candidate.message
+                    or view.author is None
+                    or view.author.connector_key != candidate.message.connector_key
+                    or not view.author.is_bridge_owned):
+                    self._record_preflight_refusal(candidate,
+                                                   'unverified physical ownership: operator review required')
+                    continue
+                tombstone = None
+                if candidate.deleted and self.tombstone_renderer is not None:
+                    tombstone = self.tombstone_renderer(candidate.domain, candidate.kind)
+                    if not isinstance(tombstone, ContentDocument):
+                        raise ValueError('domain tombstone renderer must return ContentDocument')
+                # A concurrent policy change before the claim is still safe.
+                if not self.target_policy(candidate.connector_key, candidate.surface_id):
+                    self._record_preflight_refusal(candidate, 'revoked during preflight')
+                    continue
+            except asyncio.CancelledError:
+                raise
+            except (LookupError, ConnectionError, TimeoutError) as exc:
+                # A transient pre-write read failure changes no durable claim
+                # or mutation state. The scheduler may retry on a later tick.
+                logger.warning('Physical mutation read unavailable copy=%s: %s',
+                               candidate.copy_id, exc)
+                continue
+            except Exception as exc:
+                # No claim yet. Retain a diagnosable, provably-unsent state.
+                self._record_preflight_refusal(candidate, str(exc))
+                logger.warning('Physical mutation preflight refused copy=%s: %s',
+                               candidate.copy_id, exc)
+                continue
+            claim = self._claim_one(candidate)
+            if claim is None:
+                continue
+            claimed += 1
+            # Synchronous final gate before *method entry*. After entering an
+            # adapter write method, errors/cancellation can imply remote effect.
             io_started = False
             try:
                 if not self._revalidate(claim) or not self.target_policy(
                     claim.message.connector_key, claim.surface_id
                 ):
-                    # This worker refused before calling the adapter, so
-                    # it can safely classify this *generation* as unsent.
-                    self._settle(claim, delivered=False,
-                                 definitely_unsent=True, error='revoked before transport')
+                    self._settle(claim, delivered=False, definitely_unsent=True,
+                                 error='revoked before transport')
                     continue
-                adapter = self.registry.get(claim.message.connector_key)
-                # Copy roles and absent source coordinates cannot establish
-                # bridge ownership, especially for migrated human comments.
-                view = await adapter.fetch_message(claim.message)
-                if (not isinstance(view, MessageView) or view.message != claim.message
-                    or view.author is None
-                    or view.author.connector_key != claim.message.connector_key
-                    or not view.author.is_bridge_owned):
-                    raise ValueError('unverified physical ownership: operator review required')
-                # Ownership reads await network I/O. Recheck canonical revision
-                # and surface policy after that yield before invoking a write.
-                if not self._revalidate(claim) or not self.target_policy(
-                    claim.message.connector_key, claim.surface_id
-                ):
-                    raise ValueError('revoked during physical ownership verification')
                 if claim.deleted:
-                    # Deletion of forum starters would destroy the discussion
-                    # thread. Preserve the existing tombstone-edit behavior.
-                    if self.tombstone_renderer is None:
+                    if tombstone is None:
                         io_started = True
                         await adapter.delete_message(claim.message)
                     else:
-                        tombstone = self.tombstone_renderer(claim.domain, claim.kind)
-                        if not isinstance(tombstone, ContentDocument):
-                            raise ValueError('domain tombstone renderer must return ContentDocument')
                         io_started = True
                         await adapter.edit_message(claim.message, tombstone)
                 else:
@@ -357,25 +560,14 @@ class PlatformPhysicalMutationCoordinator:
                     await adapter.edit_message(claim.message, claim.content)
                 self._settle(claim, delivered=True)
             except asyncio.CancelledError:
-                # The current adapter call may have escaped: keep its exact
-                # in-flight attempt for expiry/reconciliation. All subsequent
-                # claims are still in this worker's private batch and never
-                # crossed I/O; release only those as proven unsent.
                 if not io_started:
                     self._settle(claim, delivered=False, definitely_unsent=True,
                                  error='worker cancelled before physical write')
-                for unstarted in claims[index + 1:]:
-                    self._settle(unstarted, delivered=False,
-                                 definitely_unsent=True,
-                                 error='worker cancelled before transport')
                 raise
             except Exception as exc:
-                # After invoking the adapter, an exception cannot prove the
-                # remote operation was not applied. Before invocation, retry
-                # is safe after correcting the local refusal or configuration.
                 self._settle(claim, delivered=False, error=str(exc),
                              definitely_unsent=not io_started)
                 logger.warning('Physical mutation %s copy=%s/%s/%s: %s',
                                'unresolved' if io_started else 'failed before send',
                                claim.domain, claim.kind, claim.copy_id, exc)
-        return len(claims)
+        return claimed

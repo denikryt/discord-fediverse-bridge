@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from support.community_events import configure_renderer, OBSERVED_AT
-from support.db import add_accepted_subscription
+from bridge_test_support.community_events import configure_renderer, OBSERVED_AT
+from bridge_test_support.db import add_accepted_subscription
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 

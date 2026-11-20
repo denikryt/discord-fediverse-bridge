@@ -1,7 +1,7 @@
 """Behavior tests for guild invite publication and dashboard state."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock

@@ -1,0 +1,271 @@
+"""Typed executable contract data for the bounded ban-management pilot."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+BanAction = Literal["ban", "unban"]
+CallerRole = Literal["owner", "super_admin", "unauthorized"]
+BanScope = Literal["community", "global"]
+CommunityState = Literal["enabled", "disabled", "missing"]
+TargetKind = Literal["remote", "local"]
+ExistingBanState = Literal["absent", "active", "removed"]
+
+
+@dataclass(frozen=True, slots=True)
+class BanExpected:
+    """Declare visible operation and persisted-row outcomes independently."""
+
+    applied: bool
+    reason: str
+    active_rows: int
+    inactive_rows: int = 0
+    target_discord_user_id: str | None = None
+    audit_events: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class BanContractCase:
+    """Describe one named ban action under a concrete system state."""
+
+    id: str
+    action: BanAction
+    caller_role: CallerRole
+    scope: BanScope
+    community_state: CommunityState
+    target_kind: TargetKind
+    existing_ban_state: ExistingBanState
+    expected: BanExpected
+
+
+BAN_CONTRACT_CASES: tuple[BanContractCase, ...] = (
+    BanContractCase(
+        id="owner.scoped.enabled.remote.absent.create",
+        action="ban",
+        caller_role="owner",
+        scope="community",
+        community_state="enabled",
+        target_kind="remote",
+        existing_ban_state="absent",
+        expected=BanExpected(
+            True, "created", 1, audit_events=(("ban.created", "success"),)
+        ),
+    ),
+    BanContractCase(
+        id="super_admin.scoped.enabled.remote.absent.create",
+        action="ban",
+        caller_role="super_admin",
+        scope="community",
+        community_state="enabled",
+        target_kind="remote",
+        existing_ban_state="absent",
+        expected=BanExpected(
+            True, "created", 1, audit_events=(("ban.created", "success"),)
+        ),
+    ),
+    BanContractCase(
+        id="unauthorized.scoped.enabled.remote.absent.forbidden",
+        action="ban",
+        caller_role="unauthorized",
+        scope="community",
+        community_state="enabled",
+        target_kind="remote",
+        existing_ban_state="absent",
+        expected=BanExpected(
+            False,
+            "cannot_manage_community",
+            0,
+            audit_events=(("ban.create_forbidden", "forbidden"),),
+        ),
+    ),
+    BanContractCase(
+        id="super_admin.global.remote.absent.create",
+        action="ban",
+        caller_role="super_admin",
+        scope="global",
+        community_state="missing",
+        target_kind="remote",
+        existing_ban_state="absent",
+        expected=BanExpected(
+            True, "created", 1, audit_events=(("ban.created", "success"),)
+        ),
+    ),
+    BanContractCase(
+        id="owner.global.remote.absent.forbidden",
+        action="ban",
+        caller_role="owner",
+        scope="global",
+        community_state="missing",
+        target_kind="remote",
+        existing_ban_state="absent",
+        expected=BanExpected(
+            False,
+            "global_scope_requires_super_admin",
+            0,
+            audit_events=(("ban.create_forbidden", "forbidden"),),
+        ),
+    ),
+    BanContractCase(
+        id="owner.scoped.disabled.remote.absent.validation",
+        action="ban",
+        caller_role="owner",
+        scope="community",
+        community_state="disabled",
+        target_kind="remote",
+        existing_ban_state="absent",
+        expected=BanExpected(
+            False,
+            "community_disabled",
+            0,
+            audit_events=(("ban.create_forbidden", "forbidden"),),
+        ),
+    ),
+    BanContractCase(
+        id="owner.scoped.missing.remote.absent.validation",
+        action="ban",
+        caller_role="owner",
+        scope="community",
+        community_state="missing",
+        target_kind="remote",
+        existing_ban_state="absent",
+        expected=BanExpected(False, "unknown_or_inaccessible_community", 0),
+    ),
+    BanContractCase(
+        id="owner.scoped.enabled.local.absent.create",
+        action="ban",
+        caller_role="owner",
+        scope="community",
+        community_state="enabled",
+        target_kind="local",
+        existing_ban_state="absent",
+        expected=BanExpected(
+            True,
+            "created",
+            1,
+            target_discord_user_id="777",
+            audit_events=(("ban.created", "success"),),
+        ),
+    ),
+    BanContractCase(
+        id="owner.scoped.enabled.remote.active.duplicate",
+        action="ban",
+        caller_role="owner",
+        scope="community",
+        community_state="enabled",
+        target_kind="remote",
+        existing_ban_state="active",
+        expected=BanExpected(False, "duplicate_active_ban", 1),
+    ),
+    BanContractCase(
+        id="owner.scoped.enabled.remote.removed.reactivate",
+        action="ban",
+        caller_role="owner",
+        scope="community",
+        community_state="enabled",
+        target_kind="remote",
+        existing_ban_state="removed",
+        expected=BanExpected(
+            True, "reactivated", 1, audit_events=(("ban.reactivated", "success"),)
+        ),
+    ),
+    BanContractCase(
+        id="owner.scoped.enabled.remote.active.unban",
+        action="unban",
+        caller_role="owner",
+        scope="community",
+        community_state="enabled",
+        target_kind="remote",
+        existing_ban_state="active",
+        expected=BanExpected(
+            True,
+            "unbanned",
+            0,
+            inactive_rows=1,
+            audit_events=(("ban.removed", "success"),),
+        ),
+    ),
+    BanContractCase(
+        id="owner.scoped.enabled.remote.absent.unban_validation",
+        action="unban",
+        caller_role="owner",
+        scope="community",
+        community_state="enabled",
+        target_kind="remote",
+        existing_ban_state="absent",
+        expected=BanExpected(False, "no_active_ban", 0),
+    ),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class BanRequiredRule:
+    """Declare one reviewable ban rule and the cases that represent it."""
+
+    id: str
+    description: str
+    represented_by: tuple[str, ...]
+
+
+REQUIRED_BAN_RULES: tuple[BanRequiredRule, ...] = (
+    BanRequiredRule(
+        "owner_scoped_create",
+        "Community owner can create a scoped remote ban in an enabled community.",
+        ("owner.scoped.enabled.remote.absent.create",),
+    ),
+    BanRequiredRule(
+        "super_admin_scoped_create",
+        "Super-admin can create a scoped ban without being the owner.",
+        ("super_admin.scoped.enabled.remote.absent.create",),
+    ),
+    BanRequiredRule(
+        "unauthorized_scoped_forbidden",
+        "Unrelated caller cannot create a scoped ban.",
+        ("unauthorized.scoped.enabled.remote.absent.forbidden",),
+    ),
+    BanRequiredRule(
+        "super_admin_global_create",
+        "Super-admin can create a global ban without community scope.",
+        ("super_admin.global.remote.absent.create",),
+    ),
+    BanRequiredRule(
+        "non_admin_global_forbidden",
+        "Non-super-admin cannot create a global ban.",
+        ("owner.global.remote.absent.forbidden",),
+    ),
+    BanRequiredRule(
+        "disabled_community_rejected",
+        "Disabled community rejects scoped ban mutation.",
+        ("owner.scoped.disabled.remote.absent.validation",),
+    ),
+    BanRequiredRule(
+        "missing_community_rejected",
+        "Missing community rejects scoped ban mutation.",
+        ("owner.scoped.missing.remote.absent.validation",),
+    ),
+    BanRequiredRule(
+        "local_target_resolution",
+        "Registered local target resolves to immutable Discord identity.",
+        ("owner.scoped.enabled.local.absent.create",),
+    ),
+    BanRequiredRule(
+        "duplicate_active_rejected",
+        "Duplicate active ban is rejected without another row.",
+        ("owner.scoped.enabled.remote.active.duplicate",),
+    ),
+    BanRequiredRule(
+        "removed_ban_reactivated",
+        "Removed ban is reactivated instead of duplicated.",
+        ("owner.scoped.enabled.remote.removed.reactivate",),
+    ),
+    BanRequiredRule(
+        "active_ban_unbanned",
+        "Active scoped ban can be removed by the owner.",
+        ("owner.scoped.enabled.remote.active.unban",),
+    ),
+    BanRequiredRule(
+        "absent_unban_rejected",
+        "Unban without an active row returns validation failure.",
+        ("owner.scoped.enabled.remote.absent.unban_validation",),
+    ),
+)

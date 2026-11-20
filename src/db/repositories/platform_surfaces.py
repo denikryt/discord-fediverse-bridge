@@ -1,13 +1,18 @@
 """Connector-scoped channel identity and transactional typed-claim persistence."""
 
 from dataclasses import dataclass
+from pathlib import Path
+import sqlite3
+import ipaddress
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...content_sync.surface_resolution import ResolvedForumSource
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import select, update, String
+from sqlalchemy import select, update, String, create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from ...platform_types import ConnectorRef, ChannelRef
@@ -27,6 +32,188 @@ OWNER_MODELS = {
     "remote_subscription_id": ChannelCommunitySubscription,
     "personal_feed_binding_id": PersonalFeedBinding,
 }
+
+
+def preflight_instance_mode(
+    database_url: str, *, platform: str,
+    connector_key: str | None = None, instance_origin: str | None = None,
+) -> None:
+    """Read pre-existing SQLite ownership without migrating or adopting AP keys.
+
+    Call only while the runtime and deployment leases exclude competing writers.
+    The existing migration runner still owns schema validation and transactional
+    connector admission; this boundary prevents an unsafe *prior* commit.
+    """
+    if platform not in {"discord", "fluxer"}:
+        raise ValueError("Invalid exclusive platform mode")
+    # The released migration creates discord-primary before final connector
+    # admission. A Fluxer reservation of that key must fail even on an empty
+    # existing database, otherwise a refused startup still mutates its file.
+    if platform == "fluxer" and connector_key == "discord-primary":
+        raise ValueError("Fluxer connector key is reserved for Discord")
+    database_name = make_url(database_url).database
+    if not database_name:
+        raise ValueError("Mode preflight requires a file-backed SQLite database")
+    path = Path(database_name).resolve(strict=False)
+    if not path.exists():
+        return
+    if not path.is_file():
+        raise RuntimeError("Unsupported existing database path for platform preflight")
+    if path.stat().st_size == 0:
+        return
+
+    # SQLite URI mode=ro prevents an existing Discord v0 database being
+    # modified before Fluxer identity ownership is established. No connection
+    # constructed here may open a writer or create a missing database.
+    uri = path.as_uri() + "?mode=ro"
+    engine = create_engine("sqlite://", creator=lambda: sqlite3.connect(uri, uri=True))
+    try:
+        from ..migrations import (
+            _validate_current_v1_schema, validate_released_v0,
+        )
+        with engine.connect() as connection:
+            connection.exec_driver_sql("BEGIN")
+            version = connection.exec_driver_sql("PRAGMA user_version").scalar_one()
+            names = set(connection.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'"
+            ).scalars())
+            other_objects = connection.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='view'"
+            ).first()
+            if not names and version == 0 and other_objects is None:
+                return
+            if version == 0:
+                # A released v0 database belongs to Discord even when all of
+                # its tables happen to be empty. Fluxer must never upgrade it.
+                validate_released_v0(connection)
+                if platform == "fluxer":
+                    raise RuntimeError("Fluxer mode refuses a released Discord v0 database")
+                return
+            if version != 1:
+                raise RuntimeError("Unknown database schema/version for platform mode")
+            _validate_current_v1_schema(connection)
+            rows = connection.exec_driver_sql(
+                "SELECT connector_key,platform,instance_origin FROM platform_connectors"
+            ).all()
+            fluxer = [row for row in rows if row[1] == "fluxer"]
+            if platform == "discord":
+                if fluxer:
+                    raise RuntimeError("Discord mode refuses a Fluxer-bound database")
+                return
+            if any(row[0] != "discord-primary" and row[1] != "fluxer" for row in rows):
+                raise RuntimeError("Fluxer mode refuses unknown connector ownership")
+            if len(fluxer) > 1:
+                raise RuntimeError("Fluxer mode refuses multiple persisted bindings")
+            if fluxer and (connector_key is None or instance_origin is None or
+                           fluxer[0][0] != connector_key or fluxer[0][2] != instance_origin):
+                raise RuntimeError("Fluxer connector identity differs from persisted binding")
+            has_key = connection.exec_driver_sql(
+                "SELECT 1 FROM bridge_actor_keys LIMIT 1"
+            ).first() is not None
+            if has_key and not fluxer:
+                # Even a Discord instance with no messages has publicly owned
+                # the bridge's actor URL and signing key since first startup.
+                raise RuntimeError("Fluxer mode refuses an unbound service actor key")
+            if not fluxer:
+                # A first Fluxer admission may inherit only the inert v1
+                # discord-primary bootstrap metadata row, no domain history.
+                for table in sorted(names - {"platform_connectors", "bridge_actor_keys"}):
+                    if connection.exec_driver_sql(f'SELECT 1 FROM "{table}" LIMIT 1').first():
+                        raise RuntimeError("Fluxer mode refuses pre-existing domain state")
+            # An already-bound Fluxer DB may own its own physical copies, but
+            # never current Discord-specific author, registration or channel data.
+            if fluxer:
+                discord_tables = (
+                    "users", "registration_sessions", "personal_feed_bindings",
+                    "discord_guild_snapshots", "discord_channel_snapshots",
+                    "inbound_discord_deliveries", "local_communities",
+                    "local_subscribers", "channel_community_subscriptions",
+                )
+                for table in discord_tables:
+                    if connection.exec_driver_sql(f'SELECT 1 FROM "{table}" LIMIT 1').first():
+                        raise RuntimeError("Fluxer mode refuses Discord-owned domain rows")
+                # Inspect every direct connector FK (including channel surfaces,
+                # source and physical copies) rather than
+                # assuming a non-NULL surface proves the origin. The v1 schema
+                # has already been validated; NULL legacy FKs are not evidence
+                # of Discord ownership and must remain allowed for AP data.
+                for table in sorted(names - {"platform_connectors"}):
+                    foreign_keys = connection.exec_driver_sql(
+                        f'PRAGMA foreign_key_list("{table}")'
+                    ).mappings().all()
+                    connector_columns = {
+                        row["from"] for row in foreign_keys
+                        if row["table"] == "platform_connectors"
+                    }
+                    for column in sorted(connector_columns):
+                        foreign_source = connection.exec_driver_sql(
+                            f'SELECT 1 FROM "{table}" AS record '
+                            f'JOIN platform_connectors AS connector '
+                            f'ON connector.id=record."{column}" '
+                            "WHERE connector.platform<>'fluxer' "
+                            "OR connector.connector_key<>? LIMIT 1",
+                            (connector_key,),
+                        ).first()
+                        if foreign_source:
+                            # Keep the established surface-specific diagnostic
+                            # while checking its FK through this single path.
+                            if table == "platform_channel_surfaces":
+                                raise RuntimeError("Fluxer mode refuses Discord-owned channel surfaces")
+                            raise RuntimeError(
+                                f"Fluxer mode refuses Discord-owned {table} connector rows"
+                            )
+                # The same projection pass covers every discord_*_id column,
+                # including guild provenance on canonical message/activity rows.
+                # A populated legacy Discord ID is evidence even with Fluxer FKs.
+                for table in sorted(names):
+                    columns = connection.exec_driver_sql(
+                        f'PRAGMA table_info("{table}")'
+                    ).mappings().all()
+                    projections = (
+                        row["name"] for row in columns
+                        if row["name"].startswith("discord_") and
+                        row["name"].endswith("_id")
+                    )
+                    for column in projections:
+                        if connection.exec_driver_sql(
+                            f'SELECT 1 FROM "{table}" WHERE "{column}" IS NOT NULL LIMIT 1'
+                        ).first():
+                            raise RuntimeError(
+                                f"Fluxer mode refuses Discord-owned {table} projection"
+                            )
+                # Pre-adapter canonical groups also persist unscoped integer
+                # Discord IDs as source_*_id (not discord_*_id). These fields
+                # are independent proof of Discord ownership even when the
+                # connector/surface columns are NULL. Scoped Fluxer IDs and
+                # remote AP groups keep all of these projections NULL.
+                legacy_group_projections = {
+                    "community_thread_groups": (
+                        "source_channel_id", "source_thread_id", "source_starter_message_id",
+                    ),
+                    "community_message_groups": (
+                        "source_channel_id", "source_thread_id", "source_message_id",
+                    ),
+                }
+                for table, columns in legacy_group_projections.items():
+                    populated = " OR ".join(f'"{column}" IS NOT NULL' for column in columns)
+                    if connection.exec_driver_sql(
+                        f'SELECT 1 FROM "{table}" WHERE {populated} LIMIT 1'
+                    ).first():
+                        raise RuntimeError(f"Fluxer mode refuses Discord-owned {table} source IDs")
+                # Connector provenance is redundant with source_platform for
+                # modern data, but can disagree in a valid migrated v1 row.
+                if connection.exec_driver_sql(
+                    "SELECT 1 FROM message_mappings WHERE source_platform='discord' LIMIT 1"
+                ).first():
+                    raise RuntimeError("Fluxer mode refuses Discord-owned message sources")
+                if connection.exec_driver_sql(
+                    "SELECT 1 FROM guild_invite_publications LIMIT 1"
+                ).first():
+                    raise RuntimeError("Fluxer mode refuses Discord-owned invite publication")
+    except sqlite3.DatabaseError as error:
+        raise RuntimeError("Invalid database file for platform preflight") from error
+    finally:
+        engine.dispose()
 
 
 @dataclass(frozen=True)
@@ -111,25 +298,105 @@ class PlatformSurfaceRepository(BaseRepository):
 
     @staticmethod
     def canonical_origin(origin: str) -> str:
-        """Normalize identity metadata without discovering or contacting an API."""
-        parsed = urlsplit(origin)
+        """Canonicalize an instance identity without DNS/network side effects.
+
+        The returned bytes are persisted and compared by SQLite; noncanonical
+        direct SQL values are outside the repository's normalization contract.
+        """
         if (
-            parsed.scheme.lower() not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.path
-            or parsed.query
-            or parsed.fragment
+            not isinstance(origin, str)
+            or not origin
+            or any(char.isspace() for char in origin)
+            or "?" in origin
+            or "#" in origin
         ):
-            raise ValueError(
-                "Connector origin requires HTTP(S) scheme/host and no path, credentials, query or fragment"
-            )
-        hostname = parsed.hostname.lower()
-        host = f"[{hostname}]" if ":" in hostname else hostname
-        if parsed.port is not None:
-            host += f":{parsed.port}"
-        return urlunsplit((parsed.scheme.lower(), host, "", "", ""))
+            raise ValueError("Invalid connector origin URL")
+        try:
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme.lower() not in {"http", "https"}
+                or not parsed.netloc
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("Connector origin requires scheme and host only")
+            port = parsed.port
+            hostname = parsed.hostname
+            if port is not None and port == 0:
+                raise ValueError("Invalid connector origin port")
+            if ":" in hostname:
+                # Forbid address-zone scoping and normalize all IPv6 spellings.
+                if "%" in hostname:
+                    raise ValueError("IPv6 zone identifiers are not instance identities")
+                normalized_host = f"[{ipaddress.IPv6Address(hostname).compressed}]"
+            else:
+                host = hostname.removesuffix(".")
+                if not host or host.endswith("."):
+                    raise ValueError("Invalid DNS hostname")
+                try:
+                    normalized_host = str(ipaddress.IPv4Address(host))
+                except ipaddress.AddressValueError:
+                    # WHATWG URL interprets numeric-ending authorities as IPv4,
+                    # including shortened, octal, hexadecimal and single-integer
+                    # spellings. Python must refuse them rather than persist a
+                    # DNS string different from the Node SDK's actual origin.
+                    last_label = host.rsplit(".", 1)[-1]
+                    if re.fullmatch(r"(?:[0-9]+|0[xX][0-9a-fA-F]+)", last_label):
+                        raise ValueError("Noncanonical IPv4 connector origin")
+                    # IDNA is applied by label before saving, never by a DNS
+                    # lookup; labels must remain valid ASCII host labels.
+                    normalized_host = host.encode("idna").decode("ascii").lower()
+                    if len(normalized_host) > 253 or any(
+                        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                        for label in normalized_host.split(".")
+                    ):
+                        raise ValueError("Invalid DNS hostname")
+            scheme = parsed.scheme.lower()
+            if port is not None and not (
+                (scheme == "http" and port == 80)
+                or (scheme == "https" and port == 443)
+            ):
+                normalized_host += f":{port}"
+            return urlunsplit((scheme, normalized_host, "", "", ""))
+        except (UnicodeError, ValueError) as error:
+            raise ValueError("Invalid connector origin URL") from error
+
+    @staticmethod
+    def admit_single_trusted_fluxer(
+        session: Session, *, connector_key: str | None, instance_origin: str | None,
+    ) -> PlatformConnector | None:
+        """Admit at most one saved Fluxer binding before starting external clients.
+
+        The caller owns the transaction. An existing incompatible identity is
+        preserved for operator migration, not silently deleted or rebound.
+        """
+        rows = session.scalars(
+            select(PlatformConnector)
+            .where(PlatformConnector.platform == "fluxer")
+            .limit(2)
+        ).all()
+        if len(rows) > 1:
+            raise ValueError("Fluxer deployment has multiple persisted connector identities")
+        if connector_key is None and instance_origin is None:
+            # An explicitly disabled connector leaves its historical binding
+            # intact and never adds or starts a replacement.
+            return None
+        if connector_key is None or instance_origin is None:
+            raise ValueError("Fluxer configured identity is incomplete")
+        instance_origin = PlatformSurfaceRepository.canonical_origin(instance_origin)
+        if rows and (
+            rows[0].connector_key != connector_key
+            or rows[0].instance_origin != instance_origin
+        ):
+            raise ValueError("Fluxer configured instance conflicts with persisted identity")
+        return PlatformSurfaceRepository.add_connector(
+            session, connector_key=connector_key, platform="fluxer",
+            instance_origin=instance_origin,
+        )
 
     @staticmethod
     def add_connector(
@@ -139,7 +406,11 @@ class PlatformSurfaceRepository(BaseRepository):
         platform: str,
         instance_origin: str | None = None,
     ) -> PlatformConnector:
-        """Provision one immutable connector; uniqueness is finally enforced by SQLite."""
+        """Register an immutable connector, reusing only an identical binding.
+
+        Callers own the transaction. The permanent SQLite unique index is the
+        final arbiter of a concurrent different-key/same-origin registration.
+        """
         if not isinstance(connector_key, str) or not connector_key.strip():
             raise ValueError("Connector key must be a nonempty opaque string")
         if platform == "discord" and instance_origin is not None:
@@ -147,11 +418,16 @@ class PlatformSurfaceRepository(BaseRepository):
         if platform == "fluxer":
             if instance_origin is None:
                 raise ValueError("Fluxer connector requires an instance origin")
-            instance_origin = PlatformSurfaceRepository.canonical_origin(
-                instance_origin
-            )
+            instance_origin = PlatformSurfaceRepository.canonical_origin(instance_origin)
         if platform not in {"discord", "fluxer"}:
             raise ValueError("Unsupported connector platform")
+        existing = session.scalar(
+            select(PlatformConnector).where(PlatformConnector.connector_key == connector_key)
+        )
+        if existing is not None:
+            if existing.platform != platform or existing.instance_origin != instance_origin:
+                raise ValueError("Connector key is bound to a different platform or origin")
+            return existing
         row = PlatformConnector(
             connector_key=connector_key,
             platform=platform,

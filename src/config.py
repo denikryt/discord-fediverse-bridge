@@ -1,22 +1,113 @@
 """Environment-backed settings for the Python bridge process."""
 
+from collections.abc import Mapping
+from pathlib import Path
 from urllib.parse import urlsplit
 
+from typing import Literal
+
 from pydantic import Field, HttpUrl, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, DotEnvSettingsSource, SettingsConfigDict
+from pydantic_settings.main import ENV_FILE_SENTINEL
+
+
+class _PlatformDotEnvSource(DotEnvSettingsSource):
+    """Read each .env path once, retaining blanks only for BRIDGE_PLATFORM.
+
+    Filtering each file before Pydantic merges it preserves the old
+    ignore-empty behavior for all other fields across multiple .env files.
+    """
+
+    def _read_env_file(self, file_path: Path) -> Mapping[str, str | None]:
+        """Keep explicit empty platform selectors without rereading the input."""
+        parsed = super()._read_env_file(file_path)
+        selector = self.settings_cls.model_fields['bridge_platform']
+        names = {name for _, name, _ in self._extract_field_info(
+            selector, 'bridge_platform',
+        )}
+        # The final .env file may deliberately clear the selector, but may not
+        # clear legacy optional credentials when env_ignore_empty was enabled.
+        return {name: value for name, value in parsed.items()
+                if value != '' or name in names}
 
 
 class Settings(BaseSettings):
+    """Validate one active platform and the bridge's shared deployment settings."""
+
     # Settings centralize the bridge contract with its environment so both the
     # bot runtime and the internal HTTP API read the same values.
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
-        env_ignore_empty=True,
+        env_ignore_empty=False,
     )
 
-    discord_token: str = Field(alias="DISCORD_TOKEN")
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings,
+        file_secret_settings,
+    ):
+        """Preserve an empty platform selector at native Pydantic priorities."""
+        selector = settings_cls.model_fields['bridge_platform']
+        names = {name for _, name, _ in env_settings._extract_field_info(
+            selector, 'bridge_platform',
+        )}
+        # The process source has already normalized case and loaded env once.
+        # Keep blank BRIDGE_PLATFORM; restore ignore-empty for all other fields.
+        env_settings.env_vars = {
+            name: value for name, value in env_settings.env_vars.items()
+            if value != '' or name in names
+        }
+        return (init_settings, env_settings, dotenv_settings, file_secret_settings)
+
+    @classmethod
+    def _settings_init_sources(cls, *args, **kwargs):
+        """Replace the dotenv loader exactly once on pinned Pydantic Settings 2.14.1.
+
+        The hook is private and absent in the formerly declared 2.8.0 floor.
+        Keep pyproject.toml/uv.lock at the verified version and retest before
+        changing it; Docker installs from pyproject rather than uv.lock.
+        """
+        selected_file = kwargs.get('_env_file', ENV_FILE_SENTINEL)
+        if selected_file == ENV_FILE_SENTINEL:
+            selected_file = cls.model_config.get('env_file')
+        # Pydantic creates the default dotenv source eagerly. Disable its file
+        # read, then put a single-pass selective source in the same position.
+        # Even an explicit _env_ignore_empty=True must not hide BRIDGE_PLATFORM.
+        # Other fields still ignore blanks via the per-source filters above.
+        sources, init_kwargs = super()._settings_init_sources(
+            *args, **{**kwargs, '_env_file': None, '_env_ignore_empty': False},
+        )
+        result = list(sources)
+        for index, source in enumerate(result):
+            if isinstance(source, DotEnvSettingsSource):
+                result[index] = _PlatformDotEnvSource(
+                    cls,
+                    env_file=selected_file,
+                    env_file_encoding=source.env_file_encoding,
+                    dotenv_filtering=source.dotenv_filtering,
+                    case_sensitive=source.case_sensitive,
+                    env_prefix=source.env_prefix,
+                    env_prefix_target=source.env_prefix_target,
+                    env_nested_delimiter=source.env_nested_delimiter,
+                    env_nested_max_split=source.env_nested_max_split,
+                    env_ignore_empty=False,
+                    env_parse_none_str=source.env_parse_none_str,
+                    env_parse_enums=source.env_parse_enums,
+                )
+                break
+        return tuple(result), init_kwargs
+
+    # A service owns exactly one platform; the default remains old Discord.
+    bridge_platform: Literal["discord", "fluxer"] = Field(
+        default="discord", alias="BRIDGE_PLATFORM"
+    )
+    discord_token: str | None = Field(default=None, alias="DISCORD_TOKEN")
+    # Disabled unless the operator explicitly supplies validated connector JSON.
+    fluxer_connectors_json: str | None = Field(
+        default=None, alias="FLUXER_CONNECTORS_JSON", repr=False
+    )
 
     database_url: str = Field(default="sqlite:///./bridge.db", alias="DATABASE_URL")
     public_base_url: HttpUrl = Field(alias="PUBLIC_BASE_URL")
@@ -71,7 +162,9 @@ class Settings(BaseSettings):
     discord_guild_blocklist: list[str] = Field(
         default_factory=list, alias="DISCORD_GUILD_BLOCKLIST"
     )
-    bridge_super_admin_user_ids: list[str] = Field(alias="BRIDGE_SUPER_ADMIN_USER_IDS")
+    bridge_super_admin_user_ids: list[str] = Field(
+        default_factory=list, alias="BRIDGE_SUPER_ADMIN_USER_IDS"
+    )
     profile_media_root: str = Field(
         default="/data/profile-media", alias="PROFILE_MEDIA_ROOT"
     )
@@ -166,12 +259,37 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _require_bootstrap_super_admin(self) -> "Settings":
-        """Fail startup when no immutable bridge administrator is configured."""
-        if not self.bridge_super_admin_user_ids:
-            raise ValueError(
-                "BRIDGE_SUPER_ADMIN_USER_IDS must contain at least one Discord user ID"
-            )
+    def _validate_exclusive_platform(self) -> "Settings":
+        """Reject incomplete or mixed platform ownership before runtime construction.
+
+        Discord keeps its released credentials contract; standalone Fluxer has
+        its own trusted connector and must never silently initialize Discord.
+        """
+        # Parsing the existing exact connector schema here prevents a malformed
+        # secret from crossing into SQLite or the Node-owned SDK boundary.
+        connectors = self.fluxer_connectors
+        if self.bridge_platform == "discord":
+            if not self.discord_token or not self.discord_token.strip():
+                raise ValueError("DISCORD_TOKEN is required in Discord mode")
+            if not self.bridge_super_admin_user_ids:
+                raise ValueError(
+                    "BRIDGE_SUPER_ADMIN_USER_IDS must contain at least one Discord user ID"
+                )
+            if self.fluxer_connectors_json:
+                raise ValueError("Discord mode cannot configure Fluxer connectors")
+        else:
+            # Credentials supplied for an inactive platform indicate operator
+            # confusion; failing closed is safer than silently ignoring them.
+            if (
+                self.discord_token
+                or self.bridge_super_admin_user_ids
+                or self.discord_oauth_client_id
+                or self.discord_oauth_client_secret
+                or self.discord_oauth_redirect_uri is not None
+            ):
+                raise ValueError("Fluxer-only mode cannot use Discord credentials")
+            if len(connectors) != 1:
+                raise ValueError("Fluxer-only mode requires exactly one trusted connector")
         return self
 
     @model_validator(mode="after")
@@ -207,6 +325,13 @@ class Settings(BaseSettings):
         ):
             raise ValueError("lock paths must not be inside the profile media root")
         return self
+
+    @property
+    def fluxer_connectors(self):
+        """Return canonical opt-in instances without exposing raw secret JSON."""
+        from .fluxer_connector_config import parse_fluxer_connectors
+
+        return parse_fluxer_connectors(self.fluxer_connectors_json)
 
     @property
     def normalized_public_base_url(self) -> str:

@@ -1,7 +1,7 @@
 """Inbound AP Create retains authoritative content before any physical receipt."""
 from __future__ import annotations
 
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 
 import asyncio
 from dataclasses import dataclass

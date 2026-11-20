@@ -14,9 +14,9 @@ from src.operations import (
     ban_user_operation,
     unban_user_operation,
 )
-from support.ban_contracts import BAN_CONTRACT_CASES, BanContractCase
-from support.ban_effects import assert_ban_effects, collect_ban_effects
-from support.db import build_database
+from bridge_test_support.ban_contracts import BAN_CONTRACT_CASES, BanContractCase
+from bridge_test_support.ban_effects import assert_ban_effects, collect_ban_effects
+from bridge_test_support.db import build_database
 
 
 def _settings(*, super_admin: bool) -> SimpleNamespace:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import signal
+from contextlib import contextmanager
 import threading
 from pathlib import Path
 
@@ -16,12 +18,16 @@ from .community_sync.discord_fanout import DiscordFanout
 from .community_sync.runtime import CommunityRuntime
 from .config import Settings
 from .db import Database
-from .discord_bot import BridgeBot
 from .discord_adapter import DiscordAdapter
+from .fluxer_adapter import FluxerAdapter
+from .fluxer_ingress import FluxerInboundHandler
+from .fluxer_rpc_client import FluxerRpcClient
 from .platform_event_ingress import PlatformEventIngress
 from .platform_adapters import PlatformAdapterRegistry
+from .content_sync.platform_delivery_scheduler import (
+    ConnectorDispatchCapacity, PlatformPhysicalDeliveryScheduler,
+)
 from .discord_event_router import DiscordEventRouter
-from .discord_message_mutations import DiscordMessageMutationHandler
 from .discord_oauth_client import DiscordOAuthClient
 from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
@@ -33,6 +39,8 @@ from .project_version import APP_VERSION
 from .runtime import Runtime
 from .runtime_ports import DiscordMutationContext
 from .profile_media import FileLock, ProfileMediaStore
+from .runtime_cleanup import quarantine, require_safe_process
+from .runtime_ownership import acquire_runtime_lifetime_lease
 from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
 from .user_actor_delivery import UserActorDeliveryService
@@ -68,71 +76,161 @@ async def _run_bot_lifetime(runtime: Runtime, discord_token: str) -> None:
                     await runtime.personal_feed_discord_delivery_worker.stop()
                 finally:
                     try:
-                        await runtime.user_actor_delivery_worker.stop()
+                        await runtime.physical_delivery_scheduler.stop()
                     finally:
-                        # SDK transport must outlive both in-flight workers;
-                        # only Runtime.close() owns Fedify and the database.
-                        await runtime.discord_adapter.quiesce()
+                        try:
+                            await runtime.user_actor_delivery_worker.stop()
+                        finally:
+                            # SDK transport must outlive every in-flight worker;
+                            # only Runtime.close() owns Fedify and the database.
+                            await runtime.discord_adapter.quiesce()
+
+
+class _RuntimeServiceStopped(Exception):
+    """Cancel sibling services when one process-owned lifetime finishes normally."""
+
+
+class _RuntimeHttpServer(uvicorn.Server):
+    """Let the application own process signals until every runtime resource closes."""
+
+    @contextmanager
+    def capture_signals(self):
+        """Avoid Uvicorn re-raising SIGTERM before SQLite/runtime cleanup."""
+        # Uvicorn otherwise restores SIG_DFL and re-raises the captured signal
+        # after HTTP stops, bypassing the outer application's finally block.
+        yield
 
 
 async def main() -> None:
-    # Build the full runtime once and then run both long-lived entry points
-    # against the same shared state.
+    """Supervise HTTP/Discord lifetimes and retain signal ownership through close."""
     settings = Settings()
     configure_logging(settings.log_level)
-    logger.info("Starting Discord/Fediverse bridge version=%s", APP_VERSION)
+    logger.info("Starting %s/Fediverse bridge version=%s", settings.bridge_platform, APP_VERSION)
     runtime = build_runtime(settings)
-    bot = runtime.bot
-    http_app = create_http_app(runtime)
-    http_server = uvicorn.Server(
-        uvicorn.Config(
-            http_app,
-            host=settings.internal_http_host,
-            port=settings.internal_http_port,
-            log_level=settings.log_level.lower(),
-        )
-    )
-
-    async def run_bot() -> None:
-        """Run the existing Gateway task under its ordered shutdown contract."""
-        await _run_bot_lifetime(runtime, settings.discord_token)
-
-    async def run_http_server() -> None:
-        await http_server.serve()
-
+    original_handlers = {}
+    failure: BaseException | None = None
     try:
-        # Recovery starts before either long-lived server task, but inside the
-        # same close boundary so partial startup cannot leak its DB/gateway use.
+        http_app = create_http_app(runtime)
+        http_server = _RuntimeHttpServer(
+            uvicorn.Config(
+                http_app, host=settings.internal_http_host,
+                port=settings.internal_http_port, log_level=settings.log_level.lower(),
+                timeout_graceful_shutdown=30,
+            )
+        )
+
+        def request_shutdown(_signum, _frame):
+            """Close physical admission immediately and ask HTTP to drain normally."""
+            runtime.physical_dispatch_gate.close_admission()
+            http_server.should_exit = True
+
+        # Signals belong to the full application, not just its HTTP lifetime.
+        # Repeated SIGTERM cannot interrupt the later DB/lease teardown scope.
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            original_handlers[signum] = signal.signal(signum, request_shutdown)
+
+        async def run_bot() -> None:
+            """A finished Discord Gateway lifetime terminates sibling HTTP."""
+            # Settings validation already proved the exclusive Discord token;
+            # Fluxer never starts this task or initializes the Discord SDK.
+            if settings.discord_token is None:
+                raise RuntimeError('Discord runtime has no Gateway credentials')
+            await _run_bot_lifetime(runtime, settings.discord_token)
+            raise _RuntimeServiceStopped()
+
+        async def run_http_server() -> None:
+            """Join HTTP callbacks even when a failing SDK cancels this task."""
+            try:
+                await http_server.serve()
+            except BaseException as error:
+                http_server.should_exit = True
+                if http_server.started:
+                    try:
+                        await http_server.shutdown()
+                    except BaseException as cleanup_error:
+                        runtime.retain_unclosed_owner(http_server, cleanup_error)
+                        raise BaseExceptionGroup("HTTP service shutdown failures", [error, cleanup_error])
+                raise
+            # TaskGroup does not cancel siblings when a task returns normally.
+            # A private sentinel joins Discord's lifetime after graceful HTTP stop.
+            raise _RuntimeServiceStopped()
+
         runtime.user_actor_delivery_worker.start()
-        async with asyncio.TaskGroup() as task_group:
-            # Both tasks are mandatory for the bridge to function, so they share one lifecycle.
-            task_group.create_task(run_bot(), name="discord-bot")
-            task_group.create_task(run_http_server(), name="internal-http-server")
+        runtime.physical_delivery_scheduler.start()
+        try:
+            async with asyncio.TaskGroup() as task_group:
+                # Fluxer Gateway is owned by the external Node sidecar. Python
+                # still owns HTTP, workers, SQLite, and the same cleanup fence.
+                if settings.bridge_platform == 'discord':
+                    task_group.create_task(run_bot(), name="discord-bot")
+                task_group.create_task(run_http_server(), name="internal-http-server")
+        except* _RuntimeServiceStopped:
+            pass
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        await runtime.close()
+        try:
+            try:
+                await runtime.close()
+            except BaseException as cleanup_error:
+                if failure is not None:
+                    # Preserve the original service/startup failure along with
+                    # every cleanup error in the fatal process diagnostic.
+                    raise quarantine(runtime, [failure, cleanup_error])
+                raise
+        finally:
+            for signum, handler in original_handlers.items():
+                signal.signal(signum, handler)
 
 
 def build_runtime(settings: Settings) -> Runtime:
     """Recover durable state, acquire a lifetime lease, and build the runtime."""
-    deployment_lock_path = Path(settings.deployment_state_lock_path)
-    with FileLock(deployment_lock_path).acquire(
-        exclusive=True, timeout_seconds=settings.profile_media_lock_timeout_seconds
-    ):
-        recover_incomplete_restore(
-            Path(settings.database_url.removeprefix("sqlite:///")),
-            Path(settings.profile_media_root),
+    # Runtime ownership precedes recovery, schema validation and the existing
+    # deployment exclusive -> shared handoff; shared leases alone allow peers.
+    require_safe_process()
+    lifetime_lease = acquire_runtime_lifetime_lease(settings.database_url)
+    try:
+        deployment_lock_path = Path(settings.deployment_state_lock_path)
+        with FileLock(deployment_lock_path).acquire(
+            exclusive=True, timeout_seconds=settings.profile_media_lock_timeout_seconds
+        ):
+            recover_incomplete_restore(
+                Path(settings.database_url.removeprefix("sqlite:///")),
+                Path(settings.profile_media_root),
+            )
+        deployment_lease = FileLock(deployment_lock_path).acquire(
+            exclusive=False, timeout_seconds=settings.profile_media_lock_timeout_seconds
         )
-    deployment_lease = FileLock(deployment_lock_path).acquire(
-        exclusive=False, timeout_seconds=settings.profile_media_lock_timeout_seconds
-    )
-    return _build_live_runtime(settings, deployment_lease)
+    except BaseException:
+        # No SQLite owner exists yet: recovery/admission failure is safe to unwind.
+        lifetime_lease.close()
+        raise
+    # Ownership transfers before composition begins. The outer scope must never
+    # release leases after the live builder reports an unconfirmed cleanup.
+    return _build_live_runtime(settings, deployment_lease, lifetime_lease)
 
 
-def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runtime:
+def _build_live_runtime(
+    settings: Settings, deployment_lease: FileLock, runtime_lifetime_lease: FileLock
+) -> Runtime:
     """Open live runtime owners and clean them up on partial startup failure."""
-    closeables: list[object] = [deployment_lease]
+    closeables: list[object] = [runtime_lifetime_lease, deployment_lease]
     runtime: Runtime | None = None
     try:
+        # Refuse incompatible persisted ownership while holding both locks,
+        # before SQLite migration's released-v0 transaction can commit.
+        from .db.repositories.platform_surfaces import preflight_instance_mode
+        # Select the validated connector once. The read-only ownership guard,
+        # transactional admission and live owners must use the same identity.
+        trusted_fluxer = (
+            settings.fluxer_connectors[0] if settings.bridge_platform == "fluxer" else None
+        )
+        preflight_instance_mode(
+            settings.database_url, platform=settings.bridge_platform,
+            connector_key=trusted_fluxer.connector_key if trusted_fluxer else None,
+            instance_origin=trusted_fluxer.origin if trusted_fluxer else None,
+        )
         database = Database(settings.database_url)
         closeables.append(database)
         media_store = ProfileMediaStore(
@@ -148,6 +246,14 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
                 settings.normalized_fedify_origin, settings.fedify_actor_identifier
             )
         )
+        # Operator-approved Fluxer identity must be committed before SDK
+        # composition; a conflicting saved row never authorizes a rebind.
+        with database.session() as session:
+            database.platform_surfaces.admit_single_trusted_fluxer(
+                session,
+                connector_key=trusted_fluxer.connector_key if trusted_fluxer else None,
+                instance_origin=trusted_fluxer.origin if trusted_fluxer else None,
+            )
         BridgeActorKeyBootstrap(database=database, settings=settings).ensure()
 
         bridge_policy_service = BridgePolicyService(
@@ -155,8 +261,10 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
         )
         fedify_gateway = FedifyGatewayClient(settings)
         closeables.append(fedify_gateway)
-        discord_oauth_client = DiscordOAuthClient(settings)
-        closeables.append(discord_oauth_client)
+        discord_mode = settings.bridge_platform == "discord"
+        discord_oauth_client = DiscordOAuthClient(settings) if discord_mode else None
+        if discord_oauth_client is not None:
+            closeables.append(discord_oauth_client)
         user_actor_delivery_service = UserActorDeliveryService(
             database, fedify_gateway, bridge_policy_service
         )
@@ -198,149 +306,196 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             database=database,
             content_publish_service=content_publish_service,
         )
-        personal_feed_service = PersonalFeedService(database)
-        user_ban_service = UserBanService(database=database, settings=settings)
-        personal_feed_publisher = PersonalFeedPublisher(
-            database=database,
-            personal_feed_service=personal_feed_service,
-            fedify_gateway=fedify_gateway,
-            user_ban_service=user_ban_service,
-            bridge_policy_service=bridge_policy_service,
-            fedify_origin=settings.normalized_fedify_origin,
-            delivery_worker=user_actor_delivery_worker,
+        # Fluxer in area #12 has no verified user/Personal Feed publication
+        # authority. Construct Discord-specific owners only for Discord mode.
+        personal_feed_conversation_runtime = None
+        personal_feed_discord_delivery_worker = None
+        bot = None
+        event_router = None
+        personal_feed_service = None
+        if discord_mode:
+            personal_feed_service = PersonalFeedService(database)
+            user_ban_service = UserBanService(database=database, settings=settings)
+            personal_feed_publisher = PersonalFeedPublisher(
+                database=database,
+                personal_feed_service=personal_feed_service,
+                fedify_gateway=fedify_gateway,
+                user_ban_service=user_ban_service,
+                bridge_policy_service=bridge_policy_service,
+                fedify_origin=settings.normalized_fedify_origin,
+                delivery_worker=user_actor_delivery_worker,
+            )
+            personal_feed_conversation_runtime = PersonalFeedConversationRuntime(
+                database=database,
+                personal_feed_service=personal_feed_service,
+                fedify_gateway=fedify_gateway,
+                user_ban_service=user_ban_service,
+                bridge_policy_service=bridge_policy_service,
+                fedify_origin=settings.normalized_fedify_origin,
+                delivery_worker=None,
+            )
+            event_router = DiscordEventRouter(
+                database=database,
+                community_runtime=community_runtime,
+                local_community_runtime=local_community_runtime,
+                bridge_policy_service=bridge_policy_service,
+                personal_feed_service=personal_feed_service,
+                personal_feed_publisher=personal_feed_publisher,
+                personal_feed_conversation_runtime=personal_feed_conversation_runtime,
+            )
+            # Import the external Discord SDK only in its selected process.
+            from .discord_bot import BridgeBot
+            bot = BridgeBot(
+                settings=settings,
+                database=database,
+                fedify_gateway=fedify_gateway,
+                event_router=event_router,
+                bridge_policy_service=bridge_policy_service,
+                user_profile_service=user_profile_service,
+                personal_feed_service=personal_feed_service,
+                user_ban_service=user_ban_service,
+            )
+        # Exactly one SDK boundary is selected. The Node process owns Fluxer
+        # tokens and Gateway; Python owns only its scoped RPC bearer and sink.
+        connector = (
+            database.platform_surfaces.get_discord_primary_connector()
+            if discord_mode else None
         )
-        personal_feed_conversation_runtime = PersonalFeedConversationRuntime(
-            database=database,
-            personal_feed_service=personal_feed_service,
-            fedify_gateway=fedify_gateway,
-            user_ban_service=user_ban_service,
-            bridge_policy_service=bridge_policy_service,
-            fedify_origin=settings.normalized_fedify_origin,
-            delivery_worker=None,
-        )
-        event_router = DiscordEventRouter(
-            database=database,
-            community_runtime=community_runtime,
-            local_community_runtime=local_community_runtime,
-            bridge_policy_service=bridge_policy_service,
-            personal_feed_service=personal_feed_service,
-            personal_feed_publisher=personal_feed_publisher,
-            personal_feed_conversation_runtime=personal_feed_conversation_runtime,
-        )
-        bot = BridgeBot(
-            settings=settings,
-            database=database,
-            fedify_gateway=fedify_gateway,
-            event_router=event_router,
-            bridge_policy_service=bridge_policy_service,
-            user_profile_service=user_profile_service,
-            personal_feed_service=personal_feed_service,
-            user_ban_service=user_ban_service,
-        )
-        # Physical adapter borrows BridgeBot: Runtime owns its admission/drain,
-        # while the bot's async context alone closes the Discord SDK.
-        connector = database.platform_surfaces.get_discord_primary_connector()
-        adapter_registry = PlatformAdapterRegistry((connector,))
-        discord_adapter = DiscordAdapter(connector=connector, bot=bot)
-        adapter_registry.register(discord_adapter)
-        bot.bind_discord_adapter(discord_adapter)
-        event_router.bind_reply_notice_adapter(discord_adapter)
-        personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
-            database=database, adapter=discord_adapter, personal_feed_service=personal_feed_service
-        )
-        # The adapter is usable only after Discord READY. Reuse the existing
-        # SDK-owned periodic worker to recover durable community Create claims;
-        # starting a separate scheduler would weaken close/quiesce ordering.
+        fluxer_rpc = FluxerRpcClient(trusted_fluxer) if trusted_fluxer else None
+        if fluxer_rpc is not None:
+            closeables.append(fluxer_rpc)
+        fluxer_adapter = (FluxerAdapter(
+            connector_key=trusted_fluxer.connector_key,
+            instance_origin=trusted_fluxer.origin,
+            rpc=fluxer_rpc,
+            forum_applied_tags=trusted_fluxer.forum_applied_tags,
+        ) if trusted_fluxer is not None else None)
+        fluxer_ingress = (FluxerInboundHandler(database, trusted_fluxer.connector_key)
+                          if trusted_fluxer is not None else None)
+        selected = connector if discord_mode else fluxer_adapter.connector
+        configured = (selected,)
+        adapter_registry = PlatformAdapterRegistry(configured)
+        discord_adapter = DiscordAdapter(connector=connector, bot=bot) if discord_mode else None
+        if discord_adapter is not None:
+            adapter_registry.register(discord_adapter)
+        if fluxer_adapter is not None:
+            adapter_registry.register(fluxer_adapter)
+        physical_dispatch_gate = ConnectorDispatchCapacity((selected.key,))
+        if discord_adapter is not None:
+            discord_adapter.bind_physical_dispatch_gate(physical_dispatch_gate)
+            bot.bind_discord_adapter(discord_adapter)
+            event_router.bind_reply_notice_adapter(discord_adapter)
+            personal_feed_discord_delivery_worker = PersonalFeedDiscordDeliveryWorker(
+                database=database, adapter=discord_adapter,
+                personal_feed_service=personal_feed_service,
+            )
+        if fluxer_adapter is not None:
+            fluxer_adapter.bind_physical_dispatch_gate(physical_dispatch_gate)
+        # Physical recovery belongs to one runtime-owned connector scheduler.
+        # Personal Feed retains only its own Discord-specific physical work.
         from .content_sync.platform_fanout import PlatformFanoutCoordinator
-        physical_coordinator = PlatformFanoutCoordinator(database, adapter_registry)
-        personal_feed_discord_delivery_worker.add_drain(physical_coordinator.recover_pending)
-
-        # Durable physical edit/delete copies have no separate queue, including
-        # copies retained from released v0 without a Create intent.  This work
-        # is drained by the existing Discord-ready scheduler.
-        from .content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
-        from .models import ChannelSurface
-        from .platform_types import ContentDocument
-        from .formatting import (
-            format_lemmy_post_for_discord, format_lemmy_comment_for_discord,
+        physical_coordinator = PlatformFanoutCoordinator(
+            database, adapter_registry, dispatch_gate=physical_dispatch_gate,
         )
 
-        def physical_mutation_policy(connector_key: str, surface_id: int) -> bool:
-            """Recheck the live Discord policy outside SQLite writer claims."""
-            if connector_key != discord_adapter.connector.key:
-                return False
-            with database.session() as session:
-                surface = session.get(ChannelSurface, surface_id)
-                if (surface is None or surface.kind != 'forum'
-                    or not surface.external_guild_id):
+        if discord_mode:
+            # Durable mutation copies are also owned by the shared physical lane;
+            # the existing SQLite copy rows are its only durable reservation state.
+            from .content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
+            from .models import ChannelSurface
+            from .platform_types import ContentDocument
+            from .formatting import (
+                format_lemmy_post_for_discord, format_lemmy_comment_for_discord,
+            )
+
+            def physical_mutation_policy(connector_key: str, surface_id: int) -> bool:
+                """Recheck the live Discord policy outside SQLite writer claims."""
+                if connector_key != discord_adapter.connector.key:
                     return False
-                guild_id = surface.external_guild_id
-            return bridge_policy_service.is_discord_guild_allowed(guild_id)
+                with database.session() as session:
+                    surface = session.get(ChannelSurface, surface_id)
+                    if (surface is None or surface.kind != 'forum'
+                        or not surface.external_guild_id):
+                        return False
+                    guild_id = surface.external_guild_id
+                return bridge_policy_service.is_discord_guild_allowed(guild_id)
 
-        def physical_mutation_content(domain: str, kind: str, snapshot: dict) -> ContentDocument:
-            """Translate canonical snapshots at the domain/Discord boundary."""
-            author = snapshot.get('authorName') or 'remote'
-            body = snapshot['bodyMarkdown']
-            if snapshot.get('sourceKind') == 'discord_human':
-                # Author-sourced content retains its existing attribution.
-                return ContentDocument(f'`{author}`\n\n{body}' if body else f'`{author}`')
-            url = snapshot.get('url') or snapshot['apObjectId']
-            actor_id = snapshot.get('authorActorId') or ''
-            if kind == 'post':
-                rendered = format_lemmy_post_for_discord(
-                    author, snapshot.get('title') or 'Untitled remote post',
-                    body, url, actor_id,
-                )
-            else:
-                rendered = format_lemmy_comment_for_discord(author, body, url, actor_id)
-            return ContentDocument(rendered)
+            def physical_mutation_content(domain: str, kind: str, snapshot: dict) -> ContentDocument:
+                """Translate canonical snapshots at the domain/Discord boundary."""
+                author = snapshot.get('authorName') or 'remote'
+                body = snapshot['bodyMarkdown']
+                if snapshot.get('sourceKind') == 'discord_human':
+                    # Author-sourced content retains its existing attribution.
+                    return ContentDocument(f'`{author}`\n\n{body}' if body else f'`{author}`')
+                url = snapshot.get('url') or snapshot['apObjectId']
+                actor_id = snapshot.get('authorActorId') or ''
+                if kind == 'post':
+                    rendered = format_lemmy_post_for_discord(
+                        author, snapshot.get('title') or 'Untitled remote post',
+                        body, url, actor_id,
+                    )
+                else:
+                    rendered = format_lemmy_comment_for_discord(author, body, url, actor_id)
+                return ContentDocument(rendered)
 
-        physical_mutation_coordinator = PlatformPhysicalMutationCoordinator(
-            database, adapter_registry,
-            target_policy=physical_mutation_policy,
-            content_renderer=physical_mutation_content,
-            tombstone_renderer=lambda _domain, _kind: ContentDocument('*deleted by creator*'),
+            physical_mutation_coordinator = PlatformPhysicalMutationCoordinator(
+                database, adapter_registry,
+                target_policy=physical_mutation_policy,
+                content_renderer=physical_mutation_content,
+                tombstone_renderer=lambda _domain, _kind: ContentDocument('*deleted by creator*'),
+                dispatch_gate=physical_dispatch_gate,
+            )
+        else:
+            # FLUXER_CANONICAL_MUTATIONS_PENDING_ISSUE13: Fluxer-only issue #12 has no verified community/subscription copy owners; omit canonical mutation scheduling and Discord rendering until issue #13 installs an authenticated Fluxer source/target policy and content renderer.
+            physical_mutation_coordinator = None
+        physical_delivery_scheduler = PlatformPhysicalDeliveryScheduler(
+            connector_keys=tuple(ref.key for ref in configured),
+            fanout=physical_coordinator, mutations=physical_mutation_coordinator,
         )
-        personal_feed_discord_delivery_worker.add_drain(physical_mutation_coordinator.drain)
-        personal_feed_conversation_runtime.bind_delivery_wake(
-            personal_feed_discord_delivery_worker
-        )
-        bot.bind_personal_feed_delivery_worker(personal_feed_discord_delivery_worker)
-        mutation_context = DiscordMutationContext(
-            bridge_policy_service=bridge_policy_service,
-            user_actor_delivery_service=user_actor_delivery_service,
-            user_actor_delivery_wake=user_actor_delivery_worker,
-            fedify_gateway=fedify_gateway,
-        )
-        message_mutation_handler = DiscordMessageMutationHandler(
-            database=database,
-            event_router=event_router,
-            discord_fetcher=bot,
-            mutation_context_provider=lambda: mutation_context,
-        )
-        bot.set_message_mutation_handler(message_mutation_handler)
-        discord_adapter.bind_ingress_sink(PlatformEventIngress(
-            adapter=discord_adapter, mutations=message_mutation_handler,
-            creates=event_router,
-        ))
-        # MULTIPLATFORM_LEGACY_DISCORD_PORT_TEMP: Production still binds BridgeBot directly into Discord fanout and runtimes; Discord adapter and durable fan-out integration must register a real DiscordAdapter and replace these binds without a default-Discord fallback.
-        discord_fanout = DiscordFanout(
-            bot=bot,
-            mutation_tracker=message_mutation_handler,
-            database=database,
-            policy_service=bridge_policy_service,
-            adapter=discord_adapter,
-        )
-        community_runtime.bind_discord_fanout(discord_fanout)
-        community_runtime.bind_discord_client(bot)
-        local_community_runtime.bind_discord_client(bot)
-        # Discord-originated Local Community edits/deletes must never fall back
-        # to an SDK bot when the typed transport returns an uncertain result.
-        local_community_runtime.bind_discord_adapter(discord_adapter)
+        physical_dispatch_gate.bind_wake(physical_delivery_scheduler.wake)
+        physical_coordinator.bind_delivery_wake(physical_delivery_scheduler.wake)
+        if discord_mode:
+            personal_feed_conversation_runtime.bind_delivery_wake(
+                personal_feed_discord_delivery_worker
+            )
+            bot.bind_personal_feed_delivery_worker(personal_feed_discord_delivery_worker)
+            mutation_context = DiscordMutationContext(
+                bridge_policy_service=bridge_policy_service,
+                user_actor_delivery_service=user_actor_delivery_service,
+                user_actor_delivery_wake=user_actor_delivery_worker,
+                fedify_gateway=fedify_gateway,
+            )
+            from .discord_message_mutations import DiscordMessageMutationHandler
+            message_mutation_handler = DiscordMessageMutationHandler(
+                database=database,
+                event_router=event_router,
+                discord_fetcher=bot,
+                mutation_context_provider=lambda: mutation_context,
+            )
+            bot.set_message_mutation_handler(message_mutation_handler)
+            discord_adapter.bind_ingress_sink(PlatformEventIngress(
+                adapter=discord_adapter, mutations=message_mutation_handler,
+                creates=event_router,
+            ))
+            # MULTIPLATFORM_LEGACY_DISCORD_PORT_TEMP: Production still binds BridgeBot directly into Discord fanout and runtimes; Discord adapter and durable fan-out integration must register a real DiscordAdapter and replace these binds without a default-Discord fallback.
+            discord_fanout = DiscordFanout(
+                bot=bot,
+                mutation_tracker=message_mutation_handler,
+                database=database,
+                policy_service=bridge_policy_service,
+                adapter=discord_adapter,
+            )
+            community_runtime.bind_discord_fanout(discord_fanout)
+            community_runtime.bind_discord_client(bot)
+            local_community_runtime.bind_discord_client(bot)
+            # Discord-originated Local Community edits/deletes must never fall back
+            # to an SDK bot when the typed transport returns an uncertain result.
+            local_community_runtime.bind_discord_adapter(discord_adapter)
         user_actor_follow_service = UserActorFollowService(
             database=database, fedify_gateway=fedify_gateway, discord_notices=discord_adapter
         )
-        user_actor_delivery_service.bind_discord_message_reader(discord_adapter)
+        if discord_adapter is not None:
+            user_actor_delivery_service.bind_discord_message_reader(discord_adapter)
         runtime = Runtime(
             settings=settings,
             database=database,
@@ -351,8 +506,13 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             bridge_policy_service=bridge_policy_service,
             bot=bot,
             discord_adapter=discord_adapter,
+            fluxer_adapter=fluxer_adapter,
+            fluxer_rpc=fluxer_rpc,
+            fluxer_ingress=fluxer_ingress,
             adapter_registry=adapter_registry,
             physical_mutation_coordinator=physical_mutation_coordinator,
+            physical_delivery_scheduler=physical_delivery_scheduler,
+            physical_dispatch_gate=physical_dispatch_gate,
             community_runtime=community_runtime,
             local_community_runtime=local_community_runtime,
             profile_media_store=media_store,
@@ -363,47 +523,110 @@ def _build_live_runtime(settings: Settings, deployment_lease: FileLock) -> Runti
             personal_feed_conversation_runtime=personal_feed_conversation_runtime,
             personal_feed_discord_delivery_worker=personal_feed_discord_delivery_worker,
             deployment_state_lease=deployment_lease,
+            runtime_lifetime_lease=runtime_lifetime_lease,
         )
         _validate_runtime_graph(runtime)
         return runtime
-    except Exception:
-        # Before Runtime exists, app.py owns every opened closeable.  Close in the
-        # reverse ownership order used by Runtime.close() so failed validation or
-        # bind errors do not leak the DB engine, HTTP clients, or deployment lease.
-        if runtime is not None:
-            _close_partial_resource(runtime)
-        else:
-            for resource in reversed(closeables):
-                _close_partial_resource(resource)
-        raise
+    except BaseException as startup_error:
+        # Retry only teardown, never composition or network writes. A completed
+        # Runtime owns both leases; partial composition retains the whole list.
+        failures: list[BaseException] = [startup_error]
+        owner = runtime if runtime is not None else closeables
+        for _attempt in range(2):
+            cleanup_errors: list[BaseException] = []
+            if runtime is not None:
+                try:
+                    _close_partial_resource(runtime)
+                except BaseException as error:
+                    cleanup_errors.append(error)
+            else:
+                # Every non-lock owner is attempted even if an earlier one fails.
+                # Leases stay strongly reachable and locked on any uncertainty.
+                for resource in reversed(closeables[2:]):
+                    try:
+                        _close_partial_resource(resource)
+                    except BaseException as error:
+                        cleanup_errors.append(error)
+                if not cleanup_errors:
+                    for lease in (deployment_lease, runtime_lifetime_lease):
+                        try:
+                            lease.close()
+                        except BaseException as error:
+                            cleanup_errors.append(error)
+                            break
+            failures.extend(cleanup_errors)
+            if not cleanup_errors:
+                if len(failures) > 1:
+                    raise BaseExceptionGroup("Startup failure with recovered cleanup errors", failures)
+                raise
+        raise quarantine(owner, failures)
 
 
 def _validate_runtime_graph(runtime: Runtime) -> None:
-    """Fail startup before callbacks run if required production binds are missing."""
-    # These guards are local and non-I/O: they prove the remaining true cycles
-    # were completed by named bind methods rather than raw app-level mutation.
+    """Reject missing, extra or incorrectly bound platform-owned resources."""
+    keys = runtime.physical_delivery_scheduler.connector_keys
+    if (len(keys) != 1 or runtime.physical_dispatch_gate.connector_keys != keys
+        or set(runtime.adapter_registry._allowed) != set(keys)
+        or set(runtime.adapter_registry._adapters) != set(keys)):
+        raise RuntimeError('Runtime must register exactly its selected connector')
+
+    if runtime.settings.bridge_platform == 'fluxer':
+        fluxer = runtime.fluxer_adapter
+        if (runtime.bot is not None or runtime.discord_adapter is not None
+            or runtime.discord_oauth_client is not None
+            or runtime.personal_feed_discord_delivery_worker is not None
+            or runtime.personal_feed_conversation_runtime is not None
+            or runtime.physical_mutation_coordinator is not None):
+            raise RuntimeError('Fluxer-only runtime unexpectedly owns Discord services')
+        if (fluxer is None or runtime.fluxer_rpc is None or runtime.fluxer_ingress is None
+            or runtime.adapter_registry.get(fluxer.connector.key) is not fluxer
+            or fluxer.connector.key != keys[0]
+            or fluxer._physical_dispatch_gate is not runtime.physical_dispatch_gate
+            or runtime.fluxer_ingress.connector_key != fluxer.connector.key):
+            raise RuntimeError('Fluxer-only runtime is missing exact transport owners')
+        if (runtime.user_actor_follow_service.discord_notices is not None
+            or runtime.user_actor_delivery_service.discord_message_reader is not None):
+            raise RuntimeError('Fluxer runtime must not bind Discord user notification ports')
+        return
+
+    # Existing Discord dependencies remain strict, but there can no longer be
+    # a simultaneous Fluxer adapter, namespace, registration or recovery lane.
+    if (runtime.fluxer_adapter is not None or runtime.fluxer_rpc is not None
+        or runtime.fluxer_ingress is not None):
+        raise RuntimeError('Discord-only runtime unexpectedly owns Fluxer SDK clients')
+    if (runtime.bot is None or runtime.discord_adapter is None
+        or runtime.discord_oauth_client is None
+        or runtime.personal_feed_discord_delivery_worker is None
+        or runtime.personal_feed_conversation_runtime is None
+        or runtime.physical_mutation_coordinator is None):
+        raise RuntimeError('Discord runtime is missing platform-owned services')
     runtime.bot._require_message_mutation_handler()
     if runtime.bot.discord_adapter is not runtime.discord_adapter:
-        raise RuntimeError("Runtime Discord adapter is not bound to BridgeBot")
+        raise RuntimeError('Runtime Discord adapter is not bound to BridgeBot')
     if runtime.adapter_registry.get(runtime.discord_adapter.connector.key) is not runtime.discord_adapter:
         raise RuntimeError('Live Discord adapter is not registered for persisted connector')
+    if (runtime.physical_mutation_coordinator.dispatch_gate is not runtime.physical_dispatch_gate
+        or runtime.discord_adapter._physical_dispatch_gate is not runtime.physical_dispatch_gate):
+        raise RuntimeError('Direct and recovery dispatch must share runtime capacity')
     if runtime.physical_mutation_coordinator.registry is not runtime.adapter_registry:
         raise RuntimeError('Physical mutation coordinator must use live registered adapters')
+    if runtime.discord_adapter.connector.key != keys[0]:
+        raise RuntimeError('Physical recovery scheduler lacks the Discord connector lane')
     if runtime.discord_adapter._sink is None:
-        raise RuntimeError("Discord normalized ingress is not configured")
+        raise RuntimeError('Discord normalized ingress is not configured')
     runtime.bot._require_personal_feed_delivery_worker()
     if runtime.community_runtime.discord_fanout is None:
-        raise RuntimeError("CommunityRuntime Discord fanout is not configured")
+        raise RuntimeError('CommunityRuntime Discord fanout is not configured')
     if runtime.community_runtime.bot is None:
-        raise RuntimeError("CommunityRuntime Discord client is not configured")
+        raise RuntimeError('CommunityRuntime Discord client is not configured')
     if runtime.local_community_runtime.bot is None:
-        raise RuntimeError("LocalCommunityRuntime Discord client is not configured")
+        raise RuntimeError('LocalCommunityRuntime Discord client is not configured')
     if runtime.personal_feed_conversation_runtime.delivery_worker is None:
-        raise RuntimeError("Personal-feed conversation delivery wake is not configured")
+        raise RuntimeError('Personal-feed conversation delivery wake is not configured')
     if runtime.user_actor_follow_service.discord_notices is not runtime.discord_adapter:
-        raise RuntimeError("User Actor owner notices must use DiscordAdapter")
+        raise RuntimeError('User Actor owner notices must use DiscordAdapter')
     if runtime.user_actor_delivery_service.discord_message_reader is not runtime.discord_adapter:
-        raise RuntimeError("User Actor reconciliation must use DiscordAdapter")
+        raise RuntimeError('User Actor reconciliation must use DiscordAdapter')
 
 
 def _close_partial_resource(resource: object) -> None:

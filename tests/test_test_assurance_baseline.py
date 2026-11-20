@@ -32,7 +32,7 @@ def test_group_selectors_partition_the_existing_suite() -> None:
         "--ignore=tests/commands",
         "--ignore=tests/operations",
     )
-    assert TEST_GROUPS["vendor_discordops"] == ("vendor/discordops/tests",)
+    assert TEST_GROUPS["vendor_discordops"] == ("vendor/discordops/discordops_tests",)
 
 
 def test_parse_collected_nodeids_keeps_parameterized_cases_only() -> None:

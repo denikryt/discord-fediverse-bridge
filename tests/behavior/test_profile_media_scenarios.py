@@ -76,7 +76,9 @@ def test_public_route_requires_persisted_opaque_id_and_sets_immutable_headers(
     """HTTP delivery cannot enumerate or bypass database ownership of media bytes."""
     database, store, service, user = _system(tmp_path)
     asset = service.replace_media(user.id, "avatar", _png()).avatar
-    runtime = SimpleNamespace(database=database, profile_media_store=store)
+    # Media-only fixtures still model the selected Discord runtime for HTTP mounting.
+    runtime = SimpleNamespace(database=database, profile_media_store=store,
+                              settings=SimpleNamespace(bridge_platform="discord"))
     client = TestClient(create_http_app(runtime))
     response = client.get(f"/media/profile/{asset.public_id}")
     assert response.status_code == 200

@@ -73,6 +73,7 @@ def follow_runtime(tmp_path):
         discord_notices=bot,
     )
     runtime = SimpleNamespace(
+        settings=SimpleNamespace(bridge_platform='discord'),
         database=database,
         user_actor_follow_service=service,
         bridge_policy_service=SimpleNamespace(

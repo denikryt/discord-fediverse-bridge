@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from support.community_events import create_thread, create_message, configure_renderer, source_ids, physical_forum, message_copy, ScenarioDiscord, admit_thread, mutation_runtime, OBSERVED_AT
-from support.runtime import build_test_policy_service
+from bridge_test_support.community_events import create_thread, create_message, configure_renderer, source_ids, physical_forum, message_copy, ScenarioDiscord, admit_thread, mutation_runtime, OBSERVED_AT
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,13 +14,13 @@ from sqlalchemy import func, select
 
 from src.activitypub_models import ActivityPubEvent
 from src.discord_event_router import DiscordEventRouter
-from support.typed_forum_creates import route_verified_forum_thread, verified_forum_reply
+from bridge_test_support.typed_forum_creates import route_verified_forum_thread, verified_forum_reply
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from src.models import LocalCommunityThread, LocalCommunityThreadSurface
-from support.db import add_registered_user, build_database
-from support.discord import (
+from bridge_test_support.db import add_registered_user, build_database
+from bridge_test_support.discord import (
     build_bot,
     build_forum_channel_object_result,
     build_forum_channel_tuple_result,

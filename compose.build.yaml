@@ -19,3 +19,10 @@ services:
       dockerfile: fedify-gateway/Dockerfile
       args:
         APP_VERSION: ${BRIDGE_VERSION:?BRIDGE_VERSION is required}
+
+  fluxer-sidecar:
+    build:
+      context: .
+      dockerfile: fluxer-connector/Dockerfile
+      args:
+        APP_VERSION: ${BRIDGE_VERSION:?BRIDGE_VERSION is required}

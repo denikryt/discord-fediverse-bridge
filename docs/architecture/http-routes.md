@@ -17,6 +17,7 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/dashboard/data` | GET | Python FastAPI | public | Public bridge dashboard JSON | `src/http_api.py` | Python |
 | `/internal/activitypub/events` | POST | Python FastAPI | private | Gateway-to-Python AP event intake | `src/http_api.py` | Not publicly routed |
 | `/internal/fedify/*` | GET/POST | Python FastAPI | private | Authenticated Gateway read models and signing keys | `src/internal_fedify_api.py` | Not publicly routed |
+| `/internal/fluxer/events` | POST | Python FastAPI, opt-in only | bearer authenticated on existing listener | Connector-matched normalized Fluxer Gateway DTO; handler gates AP publication until #13 | `src/internal_fluxer_api.py`, `src/fluxer_ingress.py` | Not publicly routed; network isolation not guaranteed when bridge binds `0.0.0.0` |
 | `/healthz` | GET | Fedify gateway | public | Gateway health | `fedify-gateway/src/routes/health.ts` | Gateway |
 | `/.well-known/webfinger` | GET | Fedify gateway | public | Actor discovery | `fedify-gateway/src/routes/public-discovery.ts` | Gateway |
 | `/.well-known/discord-fediverse-bridge/communities` | GET | Fedify gateway | public | Bridge-owned public local-community discovery | `fedify-gateway/src/routes/public-discovery.ts` | Gateway |
@@ -42,9 +43,20 @@ This document explains HTTP route ownership between the Python bridge and the Fe
 | `/update` | POST | Fedify gateway | internal | Send Update | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
 | `/delete` | POST | Fedify gateway | internal | Send Delete | `fedify-gateway/src/routes/internal-publish.ts` | Internal/gateway |
 
+**Fluxer ingress:** When the one trusted connector is enabled,
+`src/app.py` supplies `src/internal_fluxer_api.py` to `create_http_app()`.
+Its authenticated `POST /internal/fluxer/events` endpoint validates an exact
+connector-bound DTO under runtime-owned admission and calls only the
+`FluxerInboundHandler` SQLite ownership gate. Disabled deployments register
+no Fluxer endpoint. The standard Python listener binds `0.0.0.0`, so a
+sidecar's shared namespace/loopback delivery does **not** make this endpoint
+network-private: bearer authentication is mandatory and nginx must never
+route the internal path publicly. The production Node sidecar has not yet
+passed live two-container acceptance.
+
 `/healthz` exists in both processes. In the public-host deployment, public `/healthz` should stay gateway-owned unless an operator intentionally adds a Python health alias.
 
-All `/internal/*` routes are authenticated with the shared gateway secret and must not be routed publicly by nginx.
+All `/internal/*` routes are authenticated and must not be routed publicly by nginx. Fluxer uses its own connector-specific RPC/event bearer, **not** the ActivityPub gateway secret.
 
 `/actors/`, `/.well-known/webfinger`, `/.well-known/discord-fediverse-bridge/communities`, and `/inbox` are gateway-owned public identity, discovery, or delivery paths and should stay out of the Python bridge namespace. Retired local ActivityPub aliases under `/users/`, `/communities/`, `/c/`, and `/activitypub/` are not public AP gateway surfaces.
 

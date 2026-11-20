@@ -17,7 +17,7 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     add_project_import_paths(root)
 
-    from support.inbound_contract_manifest import INBOUND_CONTRACT_ENTRIES
+    from bridge_test_support.inbound_contract_manifest import INBOUND_CONTRACT_ENTRIES
 
     return run_owner_report(
         root=root,

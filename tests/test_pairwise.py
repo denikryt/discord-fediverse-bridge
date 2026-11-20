@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from support.pairwise import (
+from bridge_test_support.pairwise import (
     coverage_summary,
     enumerate_valid_cases,
     select_pairwise_cases,

@@ -11,8 +11,11 @@ uv sync --extra dev
 cd fedify-gateway && npm ci && cd ..
 ```
 
-Run the complete Python test suite, including behavior, contract, property,
-stateful, and model-based tests:
+Run the complete Python test suite, including application behavior, contract,
+property, stateful, model-based and vendored discordops tests. The default
+importlib mode avoids collisions with the vendor `tests` package. Shared
+application fixtures live in `tests/bridge_test_support`, which is also
+importable by `multiprocessing` children using `spawn`:
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -23,6 +26,13 @@ Run the complete Fedify gateway TypeScript suite:
 ```bash
 cd fedify-gateway && npm test
 ```
+
+The gateway suite runs on Node 22 with dependencies installed by `npm ci`.
+Its cross-language contract test uses the repository `.venv` to validate events
+against the real Python schema. CI prepares that environment with
+`uv sync --frozen --extra dev` from the repository root in the Fedify job itself.
+SQLite fixtures use `node:sqlite`; the published-object scenarios execute from
+an isolated working directory to verify their independence from Python setup.
 
 Run the complete relay exploration layer only:
 
@@ -128,7 +138,7 @@ Run the remaining project tests without double-counting the specialized groups:
 Run the vendored DiscordOps framework tests:
 
 ```bash
-.venv/bin/python -m pytest -q --durations=0 vendor/discordops/tests
+.venv/bin/python -m pytest -q --durations=0 vendor/discordops/discordops_tests
 ```
 
 ## Generate the measurable baseline

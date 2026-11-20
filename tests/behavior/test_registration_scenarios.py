@@ -1,7 +1,7 @@
 """Behavior scenarios for user registration and repeat registration flows."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,6 +57,7 @@ def _runtime(tmp_path: Path) -> SimpleNamespace:
     """Build the shared runtime used by registration routes in these scenarios."""
     database = _database(tmp_path)
     settings = SimpleNamespace(
+        bridge_platform="discord",
         fedify_shared_secret="test-secret",
         normalized_public_bridge_base_url=f"https://{BRIDGE_HOST_DOMAIN}",
         registration_session_cookie_name="bridge_registration_session",

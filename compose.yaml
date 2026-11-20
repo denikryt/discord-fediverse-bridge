@@ -1,10 +1,14 @@
 services:
   bridge:
+    # HTTP receives up to 30s to drain before runtime clients/SQLite close.
+    stop_grace_period: 60s
     image: ${BRIDGE_IMAGE:-discord-fediverse-bridge}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
     restart: unless-stopped
     env_file:
       - ${COMPOSE_ENV_FILE:-.env}
     environment:
+      # Compose mode is resolved from the same --env-file used for interpolation.
+      BRIDGE_PLATFORM: ${BRIDGE_PLATFORM-discord}
       DATABASE_URL: sqlite:////data/bridge.db
       BRIDGE_BIND_HOST: 0.0.0.0
       BRIDGE_BIND_PORT: 8080
@@ -24,6 +28,69 @@ services:
       start_period: 20s
     networks:
       - bridge-internal
+
+  fluxer-sidecar:
+    # Disabled by default. The bot token exists only in this Node container.
+    profiles: ["fluxer"]
+    image: ${FLUXER_IMAGE:-discord-fediverse-bridge-fluxer}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 45s
+    # A separate network namespace would turn 127.0.0.1 into the wrong host.
+    # Never publish this listener or connect the sidecar to a second network.
+    network_mode: "service:bridge"
+    depends_on:
+      bridge:
+        condition: service_healthy
+        restart: true
+    # Profiles cannot themselves override environment loaded by env_file.
+    # Refuse a mistakenly enabled sidecar against a Discord-mode bridge.
+    command:
+      - sh
+      - -ec
+      - >-
+        if [ "$$BRIDGE_PLATFORM" != "fluxer" ]; then
+          echo "Fluxer sidecar requires BRIDGE_PLATFORM=fluxer" >&2; exit 1;
+        fi;
+        exec node --experimental-strip-types src/main.ts
+    environment:
+      BRIDGE_PLATFORM: ${BRIDGE_PLATFORM-discord}
+      FLUXER_CONNECTOR_KEY: ${FLUXER_CONNECTOR_KEY:-}
+      FLUXER_ORIGIN: ${FLUXER_ORIGIN:-}
+      FLUXER_APPROVED_API_HOST: ${FLUXER_APPROVED_API_HOST:-}
+      FLUXER_APPROVED_GATEWAY_HOST: ${FLUXER_APPROVED_GATEWAY_HOST:-}
+      FLUXER_INTERNAL_BEARER: ${FLUXER_INTERNAL_BEARER:-}
+      # Fail closed until the actual pinned Fluxer server passes REST write acceptance.
+      FLUXER_VERIFIED_WRITE_CONTRACT: ${FLUXER_VERIFIED_WRITE_CONTRACT:-false}
+      FLUXER_RPC_PORT: "8769"
+      FLUXER_PYTHON_INGRESS_URL: http://127.0.0.1:8080/internal/fluxer/events
+      FLUXER_BOT_TOKEN_FILE: /run/secrets/fluxer-bot-token
+    secrets:
+      - source: fluxer-bot-token
+        target: fluxer-bot-token
+    healthcheck:
+      # Only an authenticated SDK READY (not a listening but disconnected
+      # Node process) makes a Fluxer connector physically dispatchable.
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:8769/rpc',
+          {method:'POST',headers:{'Authorization':'Bearer '+process.env.FLUXER_INTERNAL_BEARER,
+          'Content-Type':'application/json'},
+          body:JSON.stringify({connector_key:process.env.FLUXER_CONNECTOR_KEY,
+          operation:'health',args:{}})})
+          .then(async r=>{const body=await r.json();
+          if(!r.ok||!body.ok||body.result?.state!=='ready'||
+          body.result?.connector_key!==process.env.FLUXER_CONNECTOR_KEY||
+          body.result?.instance_origin!==new URL(process.env.FLUXER_ORIGIN).origin||
+          !body.result?.bot_id||body.result?.gateway_gap)process.exit(1)})
+          .catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 
   fedify-gateway:
     image: ${GATEWAY_IMAGE:-discord-fediverse-bridge-fedify-gateway}:${BRIDGE_VERSION:?BRIDGE_VERSION is required}
@@ -85,6 +152,13 @@ services:
         condition: service_healthy
     networks:
       - bridge-internal
+
+# Compose only mounts the bot token inside the opt-in Node sidecar.
+# The default file name is intentionally *not* the secret content. Compose
+# profiles leave the disabled bridge free of any Fluxer credential mount.
+secrets:
+  fluxer-bot-token:
+    file: ${FLUXER_BOT_TOKEN_PATH:-./secrets/fluxer-bot-token}
 
 volumes:
   bridge-data:

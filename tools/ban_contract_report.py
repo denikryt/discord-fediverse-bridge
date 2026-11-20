@@ -152,7 +152,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for path in (project_root, tests_root):
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
-    from support.ban_contracts import REQUIRED_BAN_RULES
+    from bridge_test_support.ban_contracts import REQUIRED_BAN_RULES
 
     collector = BanContractCollector()
     exit_code = pytest.main(

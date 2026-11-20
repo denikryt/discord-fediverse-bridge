@@ -86,6 +86,7 @@ def world(*, gateway_failure=None, feed_failure=None, pause=False):
         discord_adapter=FakeAdapter(steps),
         personal_feed_discord_delivery_worker=FakeWorker(steps, 'feed-stop', failure=feed_failure),
         user_actor_delivery_worker=FakeWorker(steps, 'user-stop'),
+        physical_delivery_scheduler=FakeWorker(steps, 'scheduler-stop'),
     )
     return runtime, steps
 
@@ -96,7 +97,7 @@ async def test_gateway_normal_completion_stops_both_workers_before_sdk_close():
     runtime, steps = world()
     await _run_bot_lifetime(runtime, 'dummy')
     assert steps == ['sdk-enter', 'gateway-start', 'ingress-close',
-                     'ingress-drain', 'feed-stop', 'user-stop', 'io-drain', 'sdk-close']
+                     'ingress-drain', 'feed-stop', 'scheduler-stop', 'user-stop', 'io-drain', 'sdk-close']
 
 
 @pytest.mark.asyncio
@@ -105,7 +106,7 @@ async def test_gateway_failure_still_drains_before_context_exit():
     runtime, steps = world(gateway_failure=OSError('socket failed'))
     with pytest.raises(OSError, match='socket failed'):
         await _run_bot_lifetime(runtime, 'dummy')
-    assert steps[-6:] == ['ingress-close', 'ingress-drain', 'feed-stop',
+    assert steps[-7:] == ['ingress-close', 'ingress-drain', 'feed-stop', 'scheduler-stop',
                           'user-stop', 'io-drain', 'sdk-close']
 
 
@@ -115,7 +116,7 @@ async def test_first_worker_stop_error_does_not_skip_second_worker_or_io_drain()
     runtime, steps = world(feed_failure=RuntimeError('stop failed'))
     with pytest.raises(RuntimeError, match='stop failed'):
         await _run_bot_lifetime(runtime, 'dummy')
-    assert steps[-4:] == ['feed-stop', 'user-stop', 'io-drain', 'sdk-close']
+    assert steps[-5:] == ['feed-stop', 'scheduler-stop', 'user-stop', 'io-drain', 'sdk-close']
 
 
 @pytest.mark.asyncio
@@ -127,5 +128,5 @@ async def test_cancelled_gateway_joins_workers_before_context_exit():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert steps[-6:] == ['ingress-close', 'ingress-drain', 'feed-stop',
+    assert steps[-7:] == ['ingress-close', 'ingress-drain', 'feed-stop', 'scheduler-stop',
                           'user-stop', 'io-drain', 'sdk-close']

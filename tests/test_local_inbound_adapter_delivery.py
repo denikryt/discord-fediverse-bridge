@@ -11,7 +11,7 @@ import pytest
 from src.platform_types import ChannelRef, CreatedMessage, CreatedThread, MessageRef, ThreadRef
 from src.local_communities.runtime import LocalCommunityRuntime
 from test_local_receipt_persistence import world
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 from test_inbound_duplicate_admission import _post, _accepted
 
 
@@ -629,17 +629,60 @@ async def test_known_nested_parent_blocks_until_same_thread_receipt_is_verified(
             presentation=DeliveryPresentation(),
             reply_to=MessageRef('discord-primary', '400', '401'),
         )
-        # A verified parent receipt wakes exactly the persisted dependent
-        # intent. The child is materialized from canonical SQLite content and
-        # sent with its *actual* parent message reference, not a flat reply.
+        # Receipt persistence materializes the child, but never performs a
+        # nested POST on the parent's call stack. The ordinary lane owns send.
+        with db.session() as session:
+            parent_intent = session.scalar(select(PlatformDeliveryIntent).where(
+                PlatformDeliveryIntent.domain == 'local',
+                PlatformDeliveryIntent.object_kind == 'comment',
+                PlatformDeliveryIntent.canonical_row_id == parent.id))
+            assert parent_intent.state == 'delivered'
+            final_intent = session.get(PlatformDeliveryIntent, blocked_id)
+            assert final_intent.state == 'pending'
+            assert final_intent.blocked_parent_canonical_id is None
+            assert final_intent.request_json is not None
+            assert final_intent.dispatch_token is None
+        assert adapter.writes[-1] == ('comment', '400', '401')
+        assert db.local_community_surfaces.get_host_local_community_message_surface(child.id) is None
+        from src.content_sync.platform_delivery_scheduler import PlatformPhysicalDeliveryScheduler
+        from src.content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
+        scheduler = PlatformPhysicalDeliveryScheduler(
+            connector_keys=('discord-primary',), fanout=coordinator,
+            mutations=PlatformPhysicalMutationCoordinator(
+                db, coordinator.registry,
+                # This scenario admits Creates only; no canonical Edit/Delete
+                # has been accepted by the runtime under test.
+                target_policy=lambda _connector, _surface: False,
+            ),
+            poll_seconds=30,
+        )
+        coordinator.bind_delivery_wake(scheduler.wake)
+        scheduler.start()
+        try:
+            # Observe durable completion, rather than a fake SDK call that can
+            # precede committing the receipt and physical parent reference.
+            import asyncio
+            async def wait_for_child_receipt():
+                """Yield to the real lane until its SQLite receipt is committed."""
+                while True:
+                    with db.session() as session:
+                        if session.get(PlatformDeliveryIntent, blocked_id).state == 'delivered':
+                            return
+                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(wait_for_child_receipt(), 5)
+        finally:
+            await scheduler.stop()
         with db.session() as session:
             final_intent = session.get(PlatformDeliveryIntent, blocked_id)
             assert final_intent.state == 'delivered'
-            assert final_intent.blocked_parent_canonical_id is None
-            assert final_intent.request_json is not None
+            assert final_intent.dispatch_token is not None
         host = db.local_community_surfaces.get_host_local_community_message_surface(child.id)
         assert host is not None and host.external_message_id == '701'
-        assert adapter.writes[-1] == ('comment', '400', '700')
+        parent_host = db.local_community_surfaces.get_host_local_community_message_surface(parent.id)
+        assert parent_host.external_message_id == '700'
+        assert parent_host.local_community_thread_surface_id == host.local_community_thread_surface_id
+        assert host.external_parent_message_id == parent_host.external_message_id
+        assert adapter.writes[-1] == ('comment', '400', parent_host.external_message_id)
         assert not await coordinator.deliver(blocked_id)
     finally:
         db.close()

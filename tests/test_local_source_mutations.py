@@ -22,7 +22,7 @@ import discord  # Load the installed SDK; never leave a global placeholder for o
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from src.platform_types import ContentDocument, MessageRef, MessageView, PlatformOperationError
-from support.db import build_database
+from bridge_test_support.db import build_database
 
 
 class PhysicalCopies:

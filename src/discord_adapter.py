@@ -133,6 +133,20 @@ class DiscordAdapter:
         self._ingress_admission_open = True
         self._ingress_tasks: set[asyncio.Task] = set()
         self._sink: PlatformInboundSinkPort | None = None
+        self._physical_dispatch_gate = None
+
+    def bind_physical_dispatch_gate(self, gate) -> None:
+        """Inherit one runtime-owned dispatch capacity in direct coordinators."""
+        if (self._physical_dispatch_gate is not None
+            or self.connector.key not in gate.connector_keys):
+            raise RuntimeError('physical capacity already bound or wrong connector')
+        self._physical_dispatch_gate = gate
+
+    def dispatch_ready(self) -> bool:
+        """Authorize physical Create only while Discord Gateway is really ready."""
+        ready = getattr(self._bot, 'bridge_ready', None)
+        return bool(self._io_admission_open and self._ingress_admission_open
+                    and ready is not None and ready.is_set())
 
     def bind_ingress_sink(self, sink: PlatformInboundSinkPort) -> None:
         """Bind the only normalized event consumer before Gateway startup."""

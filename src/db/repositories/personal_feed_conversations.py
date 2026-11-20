@@ -33,6 +33,7 @@ def _is_uncertain_discord_create(error: str | None) -> bool:
 
 from ...models import (
     InboundConversationObject,
+    PlatformConnector,
     InboundDiscordDelivery,
     PersonalFeedThreadMapping,
     PublishedActivityObject,
@@ -184,6 +185,53 @@ class PersonalFeedConversationRepository:
             return session.scalar(
                 select(InboundConversationObject).where(
                     InboundConversationObject.object_id == object_id
+                )
+            )
+
+    def get_remote_parent_for_discord_reply(
+        self, *, root_object_id: str, thread_id: int, message_id: int,
+    ) -> str | None:
+        """Resolve a delivered remote comment only within its exact Personal Feed root.
+
+        Physical Discord replies can point at the bot's rendering of a remote
+        ActivityPub comment. Unlike bridge-authored MessageMapping rows, those
+        receipts live in InboundDiscordDelivery and must be scoped by root,
+        connector and physical thread before becoming an AP inReplyTo parent.
+        """
+        with self.session() as session:
+            return session.scalar(
+                select(InboundConversationObject.object_id)
+                .join(
+                    InboundDiscordDelivery,
+                    InboundDiscordDelivery.inbound_object_id
+                    == InboundConversationObject.id,
+                )
+                .join(
+                    PublishedActivityObject,
+                    InboundDiscordDelivery.root_published_object_id
+                    == PublishedActivityObject.id,
+                )
+                .join(
+                    PlatformConnector,
+                    InboundDiscordDelivery.connector_id == PlatformConnector.id,
+                )
+                .where(
+                    PlatformConnector.connector_key == 'discord-primary',
+                    PlatformConnector.platform == 'discord',
+                    PublishedActivityObject.object_id == root_object_id,
+                    PublishedActivityObject.publication_context == 'personal_feed',
+                    PublishedActivityObject.kind == 'post',
+                    InboundConversationObject.publication_context == 'personal_feed',
+                    InboundConversationObject.conversation_root_object_id
+                    == root_object_id,
+                    InboundConversationObject.deleted_at.is_(None),
+                    # A proved physical copy remains the same parent while an
+                    # Update is queued/in-flight: its state can be `ready` or
+                    # `dispatching` even though the receipt remains valid.
+                    InboundDiscordDelivery.discord_message_id == message_id,
+                    InboundDiscordDelivery.destination_thread_id == thread_id,
+                    InboundDiscordDelivery.external_thread_id == str(thread_id),
+                    InboundDiscordDelivery.external_message_id == str(message_id),
                 )
             )
 

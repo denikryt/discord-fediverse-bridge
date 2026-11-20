@@ -5,12 +5,14 @@ surface, exercising durable admission, cancellation, uncertainty and adoption.
 """
 from __future__ import annotations
 
+import asyncio
 import random
 import unittest
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 
+from src.content_sync.platform_fanout import PlatformFanoutCoordinator
 from src.models import (
     LocalCommunityThread, LocalCommunityThreadSurface, LocalSubscriber,
     PlatformDeliveryIntent,
@@ -19,7 +21,7 @@ from src.platform_types import (
     ContentDocument, CreateAttempt, CreatedThread, DeliveryPresentation,
     MessageRef, ThreadRef, PlatformOperationError,
 )
-from behavior.test_platform_message_fanout_scenarios import _ThreeForumFixture
+from behavior.test_platform_message_fanout_scenarios import _ThreeForumFixture, _Registry
 
 
 class MessageFanoutSQLiteStateMachine(_ThreeForumFixture):
@@ -115,6 +117,74 @@ class MessageFanoutSQLiteStateMachine(_ThreeForumFixture):
             self.assertIsNone(repo.claim(row.id))
             self.assertNotIn(row.id, repo.recoverable_pending_ids())
         self.assertTrue(all(counts.values()), counts)
+
+
+class TwoTargetCreateOracle(_ThreeForumFixture):
+    """Compare complete physical histories with an independent per-target model."""
+
+    def _run_trace(self, trace: tuple[str, ...]) -> None:
+        """Execute valid action orders and compare each SQLite/effect transition."""
+        expected_posts: list[str] = []
+        expected = {'A': 'unseen', 'C': 'unseen'}
+        c_active = True
+        self.adapter.fail_forums.add('300')
+        for action in trace:
+            if action in {'A', 'C'}:
+                # Only the first attempt crosses the platform boundary. A is
+                # accepted and confirmed; C is accepted with a lost ACK.
+                if expected[action] == 'unseen' and (action == 'A' or c_active):
+                    expected_posts.append(self.forums[action].external_channel_id)
+                    expected[action] = 'delivered' if action == 'A' else 'unresolved'
+                asyncio.run(self._deliver(action))
+            elif action == 'restart':
+                # A freshly constructed worker has no process-local memory of
+                # effects; the SQLite ledger must prevent a second C POST.
+                self.coordinator = PlatformFanoutCoordinator(
+                    self.database, _Registry(self.adapter),
+                )
+                asyncio.run(self.coordinator.recover_pending())
+            elif action == 'unsubscribe_C':
+                with self.database.immediate_session() as session:
+                    session.get(LocalSubscriber, self.targets['C'][1]).status = 'inactive'
+                c_active = False
+            else:
+                self.fail(f'unknown action {action}')
+
+            with self.subTest(prefix=trace, step=action):
+                # This oracle is derived solely from scripted provider outcomes,
+                # never from the persistence methods under verification.
+                self.assertEqual(self.adapter.posts, expected_posts)
+                with self.database.session() as session:
+                    copies = session.scalars(select(LocalCommunityThreadSurface).where(
+                        LocalCommunityThreadSurface.local_community_thread_id == self.canonical_id,
+                    )).all()
+                    owners = {row.channel_surface_id for row in copies}
+                    self.assertEqual(
+                        owners,
+                        {self.targets[label][2] for label in ('A', 'C')
+                         if expected[label] == 'delivered'},
+                    )
+                    intents = session.scalars(select(PlatformDeliveryIntent).where(
+                        PlatformDeliveryIntent.canonical_row_id == self.canonical_id,
+                    )).all()
+                    persisted = {row.channel_surface_id: row.state for row in intents}
+                    for label in ('A', 'C'):
+                        state = expected[label]
+                        surface_id = self.targets[label][2]
+                        if state == 'unseen':
+                            self.assertNotIn(surface_id, persisted)
+                        elif state == 'delivered':
+                            self.assertEqual(persisted[surface_id], 'delivered')
+                        else:
+                            self.assertEqual(persisted[surface_id], 'unresolved')
+
+    def test_confirmed_then_uncertain_with_duplicates_restart_unsubscribe(self) -> None:
+        """The successful A receipt survives C's unknown Create and later cancellation."""
+        self._run_trace(('A', 'C', 'C', 'restart', 'unsubscribe_C', 'A', 'C'))
+
+    def test_uncertain_first_does_not_block_a_on_later_tick(self) -> None:
+        """C may lose its first ACK before A delivers, without repeated posts."""
+        self._run_trace(('C', 'restart', 'A', 'C', 'A', 'unsubscribe_C', 'restart'))
 
 
 if __name__ == '__main__':

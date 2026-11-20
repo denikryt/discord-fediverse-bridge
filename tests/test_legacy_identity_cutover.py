@@ -240,7 +240,7 @@ async def test_reset_subscription_can_retry_without_replacing_claim(legacy):
     from unittest.mock import AsyncMock
     from discordops import run_operation_definition_async
     from src.operations import SubscribeInput, subscribe_operation
-    from support.runtime import build_test_policy_service
+    from bridge_test_support.runtime import build_test_policy_service
     from src.fedify_gateway_client import FollowCommunityResult
 
     _released_urls(legacy)
@@ -319,11 +319,12 @@ def test_cutover_actor_api_emits_typed_identity_and_original_key(legacy):
     from types import SimpleNamespace
     from fastapi.testclient import TestClient
     from src.http_api import create_http_app
-    from support.runtime import build_test_policy_service
+    from bridge_test_support.runtime import build_test_policy_service
 
     _released_urls(legacy)
     legacy.migrate(identity=_config())
     settings = SimpleNamespace(
+        bridge_platform="discord",
         fedify_shared_secret="secret",
         normalized_fedify_origin="https://bridge.test",
         normalized_public_bridge_base_url="https://bridge.test",

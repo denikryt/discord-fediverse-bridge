@@ -18,8 +18,8 @@ Dedup paths covered:
 """
 
 from __future__ import annotations
-from support.runtime import build_runtime_namespace
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_runtime_namespace
+from bridge_test_support.runtime import build_test_policy_service
 
 from datetime import datetime, timezone
 from pathlib import Path

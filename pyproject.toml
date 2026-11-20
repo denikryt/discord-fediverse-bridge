@@ -13,7 +13,7 @@ dependencies = [
   "fastapi>=0.115.0",
   "httpx>=0.28.0",
   "pillow>=11.0.0",
-  "pydantic-settings>=2.8.0",
+  "pydantic-settings==2.14.1",
   "sqlalchemy>=2.0.38",
   "uvicorn>=0.34.0",
 ]
@@ -24,6 +24,7 @@ dev = [
   "pytest-asyncio>=0.23.0",
   "pytest-cov>=6.0.0",
   "hypothesis>=6.0.0",
+  "PyYAML>=6.0.2",
 ]
 
 [project.scripts]
@@ -38,6 +39,7 @@ py-modules = []
 include = ["src*"]
 
 [tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
 # Test discovery adds the vendored package root explicitly so framework and app
 # tests both import the same in-repo discordops package during local runs.
 pythonpath = [
@@ -47,7 +49,7 @@ pythonpath = [
 ]
 testpaths = [
   "tests",
-  "vendor/discordops/tests",
+  "vendor/discordops/discordops_tests",
 ]
 asyncio_mode = "auto"
 

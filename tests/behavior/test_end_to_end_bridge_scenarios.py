@@ -1,9 +1,9 @@
 """cross-workflow scenarios that exercise registration, follow, publish, and dedup together."""
 
 from __future__ import annotations
-from support.community_events import configure_renderer, OBSERVED_AT
+from bridge_test_support.community_events import configure_renderer, OBSERVED_AT
 from src.platform_types import MessageRef
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from datetime import UTC, datetime
 from pathlib import Path
@@ -66,6 +66,7 @@ def _database(tmp_path: Path) -> Database:
 def _registration_runtime(database: Database) -> SimpleNamespace:
     """Build the FastAPI runtime used by cross-workflow registration steps."""
     settings = SimpleNamespace(
+        bridge_platform="discord",
         fedify_shared_secret="secret",
         normalized_public_bridge_base_url=f"https://{BRIDGE_HOST_DOMAIN}",
         registration_session_cookie_name="bridge_registration_session",

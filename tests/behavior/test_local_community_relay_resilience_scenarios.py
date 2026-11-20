@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from src.bridge_policy import PolicyType
-from support.local_community_relay import (
+from bridge_test_support.local_community_relay import (
     LocalCommunityRelayHarness,
     PlannedOutcome,
 )

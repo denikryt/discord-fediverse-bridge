@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from src.db import Database
 from src.local_communities.service import LocalCommunityService
-from support.db import build_database
+from bridge_test_support.db import build_database
 
 
 def _create_current_local_community_activity(database: Database) -> None:

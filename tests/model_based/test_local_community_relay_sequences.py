@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from support.local_community_relay import LocalCommunityRelayHarness, PlannedOutcome
+from bridge_test_support.local_community_relay import LocalCommunityRelayHarness, PlannedOutcome
 from model_based.local_community_relay_model import RelayModel
 
 ALICE = "https://lemmy.example/u/alice"

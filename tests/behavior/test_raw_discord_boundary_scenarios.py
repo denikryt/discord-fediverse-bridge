@@ -10,9 +10,9 @@ import pytest
 from src.discord_bot import BridgeBot
 from src.discord_message_mutations import DiscordMessageMutationHandler
 from src.runtime_ports import DiscordMutationContext
-from support.authored_publication import publication
+from bridge_test_support.authored_publication import publication
 from src.platform_types import MessageRef
-from support.db import add_registered_user, build_database
+from bridge_test_support.db import add_registered_user, build_database
 
 
 class _Policy:
@@ -103,7 +103,7 @@ async def test_partial_raw_update_fetch_failure_is_durable_before_handler_return
         guild_id=1,
         data={"content": "new", "author": {"username": "alice"}},
     )
-    from support.typed_mutation_ingress import TypedMutationIngress
+    from bridge_test_support.typed_mutation_ingress import TypedMutationIngress
 
     bot.discord_adapter = TypedMutationIngress(bot._require_message_mutation_handler())
     await BridgeBot.on_raw_message_edit(bot, payload)
@@ -146,7 +146,7 @@ async def test_raw_delete_has_no_timestamp_dependency_and_routes_terminal_intent
     )
     payload = SimpleNamespace(message_id=11, channel_id=10, guild_id=1)
 
-    from support.typed_mutation_ingress import TypedMutationIngress
+    from bridge_test_support.typed_mutation_ingress import TypedMutationIngress
 
     bot.discord_adapter = TypedMutationIngress(bot._require_message_mutation_handler())
     await BridgeBot.on_raw_message_delete(bot, payload)

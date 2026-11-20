@@ -2,12 +2,25 @@
 
 This document is a short, feature-oriented index of the test suite. It helps maintainers find existing coverage before adding a new test. It intentionally links to files rather than line numbers or individual test functions, because those change more often.
 
+## Discord scoped published-source replay
+
+- `tests/test_discord_bot_exact_source_dispatch.py` exercises the production
+  `BridgeBot.on_thread_create` / `on_message` callback guards against real
+  SQLite-persisted typed Community and Personal Feed sources, including the same
+  numeric message ID under different containers. It checks replay admission,
+  source isolation, and typed/legacy Personal Feed discussion adoption.
+- `tests/behavior/test_personal_feed_runtime_paths.py` continues to protect
+  older Personal Feed roots, durable reply dedup and conversation ownership.
+  The repository lookup only accepts legacy roots with an exact Discord
+  channel/message projection; generic ID-only publication lookup stays unsafe
+  for typed sources and is not used by these Gateway paths.
+
 ## Duplicate Community Create entry audit
 
 - `docs/development/community_create_legacy_entry_audit.md` inventories the
   normalized production call graph, 14 test files with 62 direct raw runtime
   invocations, external/dynamic compatibility risk and staged deletion gate.
-- `tests/support/community_events.py` supplies observed typed source events and
+- `tests/bridge_test_support/community_events.py` supplies observed typed source events and
   physical boundary fakes for the final raw-consumer migration.
 - `tests/test_single_community_create_route.py` rejects a
   reintroduced raw `DiscordEventRouter` Create entry; the migrated router cases
@@ -450,3 +463,37 @@ full Python/Node suites or live Discord/Fedify integration acceptance.
 - Raw Community mutations assert exact typed service submissions; Personal Feed
   mutations retain their independent service path. Uncertain physical Creates
   retain an unresolved durable intent without a fabricated ACK or blind retry.
+
+## Fluxer forum post wire and RPC
+
+- `fluxer-connector/tests/forum_create.test.mjs` checks one SDK REST forum
+  POST with separate thread/starter IDs through the authenticated Node HTTP
+  listener, plus malformed/ambiguous receipt, tags, parent scope, bot identity
+  and webhook refusal (no unexpected remote effects).
+- `tests/behavior/test_fluxer_forum_create_node_crossprocess.py` sends a bot
+  Create through the real Python adapter and Node service with stateful fake
+  SDK REST side effects; an immutable repeated attempt creates no second POST.
+  These tests do not replace B05 acceptance against a pinned live server.
+
+## Fluxer SDK messages and nested replies
+
+- `fluxer-connector/tests/message_send.test.mjs` checks exact SDK `replyTo`
+  and `allowedMentions` fields, guild/parent verification, missing write rights,
+  locked threads, unsupported modes and lost/mismatched physical replies.
+- `tests/behavior/test_fluxer_forum_create_node_crossprocess.py` also drives
+  a nested physical message through the actual Python-to-Node authenticated
+  boundary and checks one side-effecting SDK-edge send, parent reference and
+  no replay after a lost response. No real Fluxer server acceptance claimed.
+
+## Fluxer single trusted instance transport (Issue #12 — unaccepted live gate)
+
+The scenario/invariant status matrix is maintained in
+`docs/development/fluxer_live_verification.md` (B01–B21, R01–R24). Sources:
+`tests/behavior/test_fluxer_*`, `test_platform_recovery_connector_isolation.py`,
+`test_platform_delivery_scheduler_lanes.py`, `test_platform_mutation_claim_slots.py`,
+`test_platform_mutation_retry_fairness.py`, `test_single_runtime_ownership.py`,
+`test_fluxer_compose_topology.py` and `fluxer-connector/tests/*.test.mjs`.
+The standalone Node SDK-fake tests do **not** prove the production Docker
+namespace/secret configuration, official npm SDK type compatibility or the
+actual server's forum/starter/permissions/Gateway contracts. Full suite and
+actual container acceptance remain unverified as recorded in that matrix.

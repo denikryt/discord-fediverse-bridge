@@ -1,7 +1,7 @@
 """Behavior scenarios for the public bridge dashboard."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 import json
 from pathlib import Path
@@ -27,6 +27,7 @@ def _runtime(
 ) -> SimpleNamespace:
     """Build a minimal runtime carrying dashboard-owned dependencies."""
     settings = SimpleNamespace(
+        bridge_platform='discord',
         fedify_origin="https://discrod-bridge.example.com",
         normalized_fedify_origin="https://discrod-bridge.example.com",
         fedify_actor_identifier="bridge",

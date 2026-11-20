@@ -12,15 +12,15 @@ from src.local_communities.service import LocalCommunityService
 from src.operations import CreateCommunityInput, EditCommunityInput
 from src.operations.create_community import create_community_operation
 from src.operations.edit_community import edit_community_operation
-from support.community_management_contracts import (
+from bridge_test_support.community_management_contracts import (
     COMMUNITY_MANAGEMENT_CASES,
     CommunityManagementCase,
 )
-from support.community_management_effects import (
+from bridge_test_support.community_management_effects import (
     CommunityManagementObserved,
     collect_community_management_effects,
 )
-from support.db import build_database
+from bridge_test_support.db import build_database
 
 
 def _settings(*, super_admin: bool = False) -> SimpleNamespace:

@@ -8,8 +8,8 @@ of runtime routing until later work.
 
 from __future__ import annotations
 
-from support.community_events import create_thread, create_message, configure_renderer, source_ids
-from support.runtime import build_test_policy_service
+from bridge_test_support.community_events import create_thread, create_message, configure_renderer, source_ids
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,12 +19,12 @@ import pytest
 from sqlalchemy import text
 
 from src.discord_event_router import DiscordEventRouter
-from support.typed_forum_creates import route_verified_forum_thread
+from bridge_test_support.typed_forum_creates import route_verified_forum_thread
 from src.content_publish_service import ContentPublishService
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
-from support.db import add_registered_user, build_database
-from support.discord import build_starter_message, build_thread, build_thread_message
+from bridge_test_support.db import add_registered_user, build_database
+from bridge_test_support.discord import build_starter_message, build_thread, build_thread_message
 
 
 def _runtime(tmp_path: Path) -> tuple[object, LocalCommunityRuntime]:

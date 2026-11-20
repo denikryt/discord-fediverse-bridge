@@ -1,7 +1,7 @@
 """Runtime registration scenarios for the participant mutation support FastAPI backend."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,6 +50,7 @@ def _runtime(tmp_path: Path) -> SimpleNamespace:
     """Build the shared runtime dependencies used by registration route tests."""
     database = _database(tmp_path)
     settings = SimpleNamespace(
+        bridge_platform='discord',
         fedify_shared_secret="test-secret",
         normalized_public_bridge_base_url="https://bridge.example.com",
         normalized_fedify_origin="https://gateway.example.com",

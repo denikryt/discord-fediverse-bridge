@@ -17,7 +17,7 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     add_project_import_paths(root)
 
-    from support.identity_discovery_contracts import (
+    from bridge_test_support.identity_discovery_contracts import (
         IdentityDiscoveryCase,
         REQUIRED_IDENTITY_DISCOVERY_RULES,
     )

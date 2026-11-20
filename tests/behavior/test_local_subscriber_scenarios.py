@@ -6,7 +6,7 @@ future work will extend the runtime once the participant model is explicit.
 """
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace

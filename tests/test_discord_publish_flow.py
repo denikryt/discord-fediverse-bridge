@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 from src.platform_types import MessageRef
-from support.community_events import configure_renderer, source_ids, OBSERVED_AT
+from bridge_test_support.community_events import configure_renderer, source_ids, OBSERVED_AT
 
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.content_publish_service import ContentPublishService, UNREGISTERED_REPLY
-from support.db import add_accepted_subscription, add_registered_user, build_database
-from support.discord import build_starter_message, build_thread, build_thread_message
-from support.gateway import build_publish_result
+from bridge_test_support.db import add_accepted_subscription, add_registered_user, build_database
+from bridge_test_support.discord import build_starter_message, build_thread, build_thread_message
+from bridge_test_support.gateway import build_publish_result
 from tests_constants import BRIDGE_HOST_DOMAIN, LEMMY_EXAMPLE_DOMAIN
 
 

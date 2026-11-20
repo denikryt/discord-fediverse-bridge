@@ -11,7 +11,7 @@ from src.platform_types import (
     AuthorRef, ChannelRef, ContentDocument, MessageCreated, MessageRef,
     PlatformOperationError, ThreadRef,
 )
-from support.db import (
+from bridge_test_support.db import (
     add_accepted_subscription, add_thread_delivery, build_database, create_source_thread_group,
 )
 

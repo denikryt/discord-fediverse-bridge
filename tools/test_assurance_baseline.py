@@ -26,7 +26,7 @@ TEST_GROUPS: Mapping[str, tuple[str, ...]] = {
         "--ignore=tests/commands",
         "--ignore=tests/operations",
     ),
-    "vendor_discordops": ("vendor/discordops/tests",),
+    "vendor_discordops": ("vendor/discordops/discordops_tests",),
 }
 
 CRITICAL_MODULES: tuple[str, ...] = (

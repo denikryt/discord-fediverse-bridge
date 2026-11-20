@@ -1,6 +1,6 @@
 """Report checks for inbound ActivityPub rule ownership."""
 
-from support.inbound_contract_manifest import INBOUND_CONTRACT_ENTRIES
+from bridge_test_support.inbound_contract_manifest import INBOUND_CONTRACT_ENTRIES
 
 
 def test_inbound_manifest_has_unique_rule_ids_and_nodes() -> None:

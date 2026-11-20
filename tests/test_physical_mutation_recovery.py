@@ -18,98 +18,13 @@ from src.models import (
 from src.platform_types import AuthorRef, ContentDocument, MessageRef, MessageView
 
 
-class PhysicalMutationRecoveryScenarios(unittest.TestCase):
+from bridge_test_support.physical_mutation_recovery import PhysicalMutationScenario
+
+
+class PhysicalMutationRecoveryScenarios(PhysicalMutationScenario, unittest.TestCase):
     """Canonical revision drives every verified bot-owned physical copy."""
 
-    def setUp(self) -> None:
-        """Use a destination message that already exists, without a Create intent."""
-        t = tempfile.TemporaryDirectory()
-        self.addCleanup(t.cleanup)
-        self.db = Database(f"sqlite:///{Path(t.name) / 'bridge.db'}")
-        self.addCleanup(self.db.close)
-        self.db.migrate()
-        with self.db.immediate_session() as session:
-            community = LocalCommunity(
-                slug='local', display_name='Local',
-                actor_url='https://bridge.test/actors/communities/local',
-                inbox_url='https://bridge.test/actors/communities/local/inbox',
-                outbox_url='https://bridge.test/actors/communities/local/outbox',
-                followers_url='https://bridge.test/actors/communities/local/followers',
-                public_key_pem='public', private_key_pem='private', status='active',
-            )
-            session.add(community)
-            session.flush()
-            connector = session.scalar(select(PlatformConnector).where(
-                PlatformConnector.connector_key == 'discord-primary'))
-            surface = ChannelSurface(
-                connector_id=connector.id, external_channel_id='500',
-                external_guild_id='1', kind='forum',
-                local_community_id=community.id,
-            )
-            session.add(surface)
-            session.flush()
-            post = LocalCommunityThread(
-                local_community_id=community.id,
-                ap_activity_id='https://bridge.test/create/1',
-                ap_object_id='https://remote.test/post/1',
-                origin_kind='remote_follower', direction='ap_to_discord',
-                content_revision=1,
-                current_content_json=json.dumps({
-                    'schemaVersion': 1, 'kind': 'post',
-                    'apObjectId': 'https://remote.test/post/1',
-                    'authorName': 'Alice',
-                    'authorActorId': 'https://remote.test/users/alice',
-                    'title': 'Changed', 'bodyMarkdown': 'latest',
-                }),
-            )
-            session.add(post)
-            session.flush()
-            copy = LocalCommunityThreadSurface(
-                local_community_thread_id=post.id,
-                connector_id=connector.id, channel_surface_id=surface.id,
-                external_thread_id='900', external_starter_message_id='901',
-                discord_forum_channel_id=500, discord_thread_id=900,
-                discord_starter_message_id=901,
-                role='host', applied_revision=None,
-            )
-            session.add(copy)
-            session.flush()
-            self.copy_id = copy.id
-            self.post_id = post.id
-            self.surface_id = surface.id
 
-    def _worker(self, *, fail: bool = False):
-        """Use a typed registry with a deterministic SDK-boundary fake."""
-        from src.content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
-        calls = []
-        class Adapter:
-            """Expose exact typed message edit/delete boundary."""
-            async def fetch_message(self, message):
-                """Resolve this scenario's exact bot-owned physical copy."""
-                return MessageView(message, AuthorRef(message.connector_key, 'bot', 'bot', 'Bridge', True))
-            async def edit_message(self, message, content):
-                """Record one physical edit, possibly losing the ACK."""
-                calls.append(('edit', message, content.body))
-                if fail:
-                    raise ConnectionError('lost edit response')
-            async def delete_message(self, message):
-                """Record the exact physical delete."""
-                calls.append(('delete', message, None))
-                if fail:
-                    raise ConnectionError('lost delete response')
-        class Registry:
-            """Refuse fallback adapters from other connectors."""
-            def get(self, key):
-                """Return only the explicitly registered fake connector."""
-                if key != 'discord-primary':
-                    raise AssertionError('wrong connector')
-                return Adapter()
-        worker = PlatformPhysicalMutationCoordinator(
-            self.db, Registry(),
-            target_policy=lambda connector_key, surface_id: connector_key == 'discord-primary' and surface_id == self.surface_id,
-            content_renderer=lambda _domain, _kind, snapshot: ContentDocument(snapshot['bodyMarkdown']),
-        )
-        return worker, calls
 
     def test_migrated_copy_gets_update_without_create_intent_and_one_ack(self) -> None:
         """A v0 copy's unknown applied baseline is not a reason to skip Update."""
@@ -142,13 +57,21 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
         """Reject before I/O without making an unresolvable transport claim."""
         worker, calls = self._worker()
         worker.target_policy = lambda _connector, _surface: False
-        self.assertEqual(asyncio.run(worker.drain()), 1)
+        self.assertEqual(asyncio.run(worker.drain()), 0)
         self.assertEqual(calls, [])
         with self.db.session() as session:
             copy = session.get(LocalCommunityThreadSurface, self.copy_id)
             self.assertEqual(copy.mutation_state, 'failed_definite')
             self.assertIsNone(copy.applied_revision)
         worker.target_policy = lambda _connector, _surface: True
+        # Same-revision definitive refusals stay fenced until an explicit
+        # policy revalidation. Merely changing an in-memory predicate is not
+        # authority for repeated physical writes on scheduler ticks.
+        self.assertEqual(asyncio.run(worker.drain()), 0)
+        self.assertTrue(worker.readmit_failed_revision(
+            domain='local', kind='post', copy_id=self.copy_id,
+            connector_key='discord-primary', revision=1,
+        ))
         self.assertEqual(asyncio.run(worker.drain()), 1)
         self.assertEqual([item[0] for item in calls], ['edit'])
         with self.db.session() as session:
@@ -168,11 +91,12 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
                 raise LookupError(f'connector not ready: {connector_key}')
 
         worker.registry = UnavailableRegistry()
-        self.assertEqual(asyncio.run(worker.drain()), 1)
+        self.assertEqual(asyncio.run(worker.drain()), 0)
         self.assertEqual(calls, [])
         with self.db.session() as session:
             copy = session.get(LocalCommunityThreadSurface, self.copy_id)
-            self.assertEqual(copy.mutation_state, 'failed_definite')
+            self.assertEqual(copy.mutation_state, 'idle')
+            self.assertIsNone(copy.mutation_claim_token)
             self.assertIsNone(copy.applied_revision)
         # Registering the same connector recovers the exact original copy.
         worker.registry = healthy_registry
@@ -193,13 +117,18 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
             raise ValueError('unsupported tombstone presentation')
 
         worker.tombstone_renderer = invalid_tombstone
-        self.assertEqual(asyncio.run(worker.drain()), 1)
+        self.assertEqual(asyncio.run(worker.drain()), 0)
         self.assertEqual(calls, [])
         with self.db.session() as session:
             copy = session.get(LocalCommunityThreadSurface, self.copy_id)
             self.assertEqual(copy.mutation_state, 'failed_definite')
             self.assertIsNone(copy.applied_revision)
         worker.tombstone_renderer = lambda _domain, _kind: ContentDocument('*deleted*')
+        self.assertEqual(asyncio.run(worker.drain()), 0)
+        self.assertTrue(worker.readmit_failed_revision(
+            domain='local', kind='post', copy_id=self.copy_id,
+            connector_key='discord-primary', revision=2,
+        ))
         self.assertEqual(asyncio.run(worker.drain()), 1)
         self.assertEqual([(kind, ref) for kind, ref, _ in calls],
                          [('edit', MessageRef('discord-primary', '900', '901'))])
@@ -214,20 +143,20 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
             """Represent temporary failure to resolve connector policy."""
             raise LookupError('policy lookup unavailable')
         worker.target_policy = unavailable_policy
-        self.assertEqual(asyncio.run(worker.drain()), 1)
+        self.assertEqual(asyncio.run(worker.drain()), 0)
         self.assertEqual(calls, [])
         with self.db.session() as session:
             self.assertEqual(session.get(LocalCommunityThreadSurface, self.copy_id).mutation_state,
-                             'failed_definite')
+                             'idle')
         worker.target_policy = lambda _connector, _surface: True
         self.assertEqual(asyncio.run(worker.drain()), 1)
         self.assertEqual(len(calls), 1)
 
-    def test_cancelled_batch_releases_only_unstarted_mutations(self) -> None:
+    def test_cancelled_single_slot_never_claims_unstarted_sibling(self) -> None:
         """A cancelled worker must not strand work whose transport never began.
 
-        An already-invoked edit remains potentially sent; independently
-        reserved later copies can be proven unsent by this same worker.
+        An already-invoked edit remains potentially sent; later independent
+        copies are never reserved before their own physical dispatch slot.
         """
         later_copy_id = self._add_older_settled_copies_and_new_lagging_copy()
         with self.db.immediate_session() as session:
@@ -279,7 +208,8 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
             current = session.get(LocalCommunityThreadSurface, self.copy_id)
             never_started = session.get(LocalCommunityThreadSurface, later_copy_id)
             self.assertEqual(current.mutation_state, 'dispatching')
-            self.assertEqual(never_started.mutation_state, 'failed_definite')
+            self.assertEqual(never_started.mutation_state, 'idle')
+            self.assertIsNone(never_started.mutation_claim_token)
             self.assertIsNone(never_started.applied_revision)
         # Next worker may retry only the definitely-unsent second copy.
         restored, restored_calls = self._worker()
@@ -329,8 +259,10 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
     def test_old_claim_refuses_update_after_canonical_revision_changes(self) -> None:
         """A committed newer canonical revision fences stale transport."""
         worker, calls = self._worker()
-        claims = worker._claim_due(1)
-        self.assertEqual(len(claims), 1)
+        candidates = worker._discover_due()
+        self.assertEqual(len(candidates), 1)
+        claims = [worker._claim_one(candidates[0])]
+        self.assertIsNotNone(claims[0])
         with self.db.immediate_session() as session:
             session.get(LocalCommunityThread, self.post_id).content_revision = 2
         self.assertFalse(worker._revalidate(claims[0]))
@@ -365,58 +297,6 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
         self.assertEqual(asyncio.run(worker.drain()), 0)
         self.assertEqual(calls, [])
 
-    def _add_older_settled_copies_and_new_lagging_copy(self) -> int:
-        """Place a legitimate lagging copy behind eight already-settled rows.
-
-        The worker's batch limit applies to actual claimable operations, not
-        the first physical-copy rows that happen to be indexed by SQLite.
-        """
-        with self.db.immediate_session() as session:
-            initial_copy = session.get(LocalCommunityThreadSurface, self.copy_id)
-            initial_copy.applied_revision = 1
-            connector_id = initial_copy.connector_id
-            community_id = session.get(LocalCommunityThread, self.post_id).local_community_id
-            for index in range(7):
-                post = LocalCommunityThread(
-                    local_community_id=community_id,
-                    ap_activity_id=f'https://bridge.test/create/settled-{index}',
-                    ap_object_id=f'https://bridge.test/post/settled-{index}',
-                    origin_kind='remote_follower', direction='ap_to_discord',
-                    content_revision=1,
-                )
-                session.add(post)
-                session.flush()
-                session.add(LocalCommunityThreadSurface(
-                    local_community_thread_id=post.id,
-                    connector_id=connector_id, channel_surface_id=self.surface_id,
-                    external_thread_id=f'settled-{index}',
-                    external_starter_message_id=f'settled-msg-{index}',
-                    role='host', applied_revision=1,
-                ))
-            lagging = LocalCommunityThread(
-                local_community_id=community_id,
-                ap_activity_id='https://bridge.test/create/lagging',
-                ap_object_id='https://bridge.test/post/lagging',
-                origin_kind='remote_follower', direction='ap_to_discord',
-                content_revision=1,
-                current_content_json=json.dumps({
-                    'schemaVersion': 1, 'kind': 'post',
-                    'apObjectId': 'https://bridge.test/post/lagging',
-                    'bodyMarkdown': 'please deliver this edit',
-                }),
-            )
-            session.add(lagging)
-            session.flush()
-            last_copy = LocalCommunityThreadSurface(
-                local_community_thread_id=lagging.id,
-                connector_id=connector_id, channel_surface_id=self.surface_id,
-                external_thread_id='lagging-thread',
-                external_starter_message_id='lagging-message',
-                role='host', applied_revision=None,
-            )
-            session.add(last_copy)
-            session.flush()
-            return last_copy.id
 
     def test_recovery_pagination_respects_rebound_owner(self) -> None:
         """Paging past settled copies must not bypass live surface ownership."""
@@ -498,36 +378,6 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
 
 
 
-    def _add_healthy_recovery_neighbor(self) -> int:
-        """Create an independent due copy beside an unsupported source snapshot."""
-        with self.db.immediate_session() as session:
-            original = session.get(LocalCommunityThread, self.post_id)
-            original_copy = session.get(LocalCommunityThreadSurface, self.copy_id)
-            post = LocalCommunityThread(
-                local_community_id=original.local_community_id,
-                ap_activity_id='https://bridge.test/create/healthy-neighbor',
-                ap_object_id='https://bridge.test/post/healthy-neighbor',
-                origin_kind='remote_follower', direction='ap_to_discord',
-                content_revision=1,
-                current_content_json=json.dumps({
-                    'schemaVersion': 1, 'kind': 'post',
-                    'apObjectId': 'https://bridge.test/post/healthy-neighbor',
-                    'bodyMarkdown': 'healthy after failure',
-                }),
-            )
-            session.add(post)
-            session.flush()
-            neighbor = LocalCommunityThreadSurface(
-                local_community_thread_id=post.id,
-                connector_id=original_copy.connector_id,
-                channel_surface_id=self.surface_id,
-                external_thread_id='healthy-thread',
-                external_starter_message_id='healthy-msg',
-                role='host', applied_revision=None,
-            )
-            session.add(neighbor)
-            session.flush()
-            return neighbor.id
 
     def test_unsupported_renderer_is_isolated_from_healthy_copy(self) -> None:
         """A deterministic formatting refusal cannot roll back unrelated work."""
@@ -621,7 +471,8 @@ class PhysicalMutationRecoveryScenarios(unittest.TestCase):
         asyncio.run(cancel_read())
         with self.db.session() as session:
             copy = session.get(LocalCommunityThreadSurface, self.copy_id)
-            self.assertEqual(copy.mutation_state, 'failed_definite')
+            self.assertEqual(copy.mutation_state, 'idle')
+            self.assertIsNone(copy.mutation_claim_token)
             self.assertIsNone(copy.applied_revision)
         self.assertEqual(calls, [])
 

@@ -7,7 +7,7 @@ from .platform_surfaces import PlatformSurfaceRepository, discord_copy_query
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ...models import (
@@ -115,6 +115,48 @@ class ActivityPubObjectRepository(BaseRepository):
                     PublishedActivityObject.source_external_message_id == source.external_message_id,
                 )
             )
+
+    def get_personal_feed_root_by_discord_source(
+        self, source: MessageRef,
+    ) -> PublishedActivityObject | None:
+        """Resolve a Discord Personal Feed root by its physical channel and message.
+
+        A historical Personal Feed root may lack its typed source container but
+        retain both Discord projections. Only that same channel/message pair is
+        eligible for compatibility; forum starters and unrelated roots are not.
+        """
+        if not isinstance(source, MessageRef) or source.connector_key != 'discord-primary':
+            raise ValueError('Personal Feed root requires a Discord MessageRef')
+        if not (source.external_container_id.isdecimal()
+                and source.external_message_id.isdecimal()):
+            return None
+        with self.session() as session:
+            # DISCORD_PERSONAL_FEED_LEGACY_SOURCE_TEMP: Retain exact channel+message
+            # matching for published Personal Feed roots without a typed source
+            # container. Remove after a migration backfills all such root refs.
+            legacy = and_(
+                PublishedActivityObject.source_external_container_id.is_(None),
+                or_(
+                    PublishedActivityObject.source_external_message_id.is_(None),
+                    PublishedActivityObject.source_external_message_id == source.external_message_id,
+                ),
+            )
+            typed = and_(
+                PublishedActivityObject.source_external_container_id == source.external_container_id,
+                PublishedActivityObject.source_external_message_id == source.external_message_id,
+            )
+            rows = list(session.scalars(
+                discord_copy_query(PublishedActivityObject, source=True).where(
+                    PublishedActivityObject.publication_context == 'personal_feed',
+                    PublishedActivityObject.kind == 'post',
+                    PublishedActivityObject.discord_channel_id == int(source.external_container_id),
+                    PublishedActivityObject.discord_message_id == int(source.external_message_id),
+                    or_(typed, legacy),
+                ).limit(2)
+            ))
+            if len(rows) > 1:
+                raise ValueError('Ambiguous scoped Personal Feed root')
+            return rows[0] if rows else None
 
     def get_published_activity_object_by_discord_message_id(
         self, discord_message_id: int

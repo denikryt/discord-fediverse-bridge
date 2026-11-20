@@ -81,6 +81,11 @@ async def dispatch_activitypub_event(
 
     # Personal-feed object ownership is resolved before any community path.
     if _is_personal_feed_event(event):
+        if runtime.settings.bridge_platform == 'fluxer':
+            return HandlerResult(
+                status='skipped', outcome=InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+                detail='personal feed unavailable for active platform',
+            )
         result = runtime.personal_feed_conversation_runtime.handle_inbound_event(event)
         if result.reason in {"actor_mismatch", "unknown_object", "unknown_root"}:
             return HandlerResult(
@@ -137,6 +142,17 @@ async def dispatch_activitypub_event(
         )
     if event.event_type == "follow.accepted":
         return await handle_follow_accepted(event, runtime)
+    # FLUXER_ONLY_USER_ACTOR_FOLLOW_PENDING_ISSUE14: No verified Fluxer-owned Person accounts exist yet; reject local user Follow and Undo without constructing Discord owner notifications or persisting a follower.
+    if (
+        event.event_type in {'local.follow_requested', 'local.unfollow_requested'}
+        and event.target_actor_kind == 'user'
+        and runtime.settings.bridge_platform == 'fluxer'
+    ):
+        return HandlerResult(
+            status='skipped', outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+            detail='user actor unavailable for active platform',
+        )
+
     if event.event_type == "local.follow_requested":
         if event.target_actor_kind == "user":
             return await runtime.user_actor_follow_service.handle_follow(

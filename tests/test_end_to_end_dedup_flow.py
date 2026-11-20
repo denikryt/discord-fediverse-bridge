@@ -1,7 +1,7 @@
 """Runtime scenarios for personal feed publication deduplication and inbound hardening."""
 
 from __future__ import annotations
-from support.runtime import build_test_policy_service, build_runtime_namespace
+from bridge_test_support.runtime import build_test_policy_service, build_runtime_namespace
 
 from pathlib import Path
 from types import SimpleNamespace

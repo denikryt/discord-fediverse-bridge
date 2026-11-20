@@ -1,8 +1,8 @@
 """Behavior scenarios for community-scoped local user ban enforcement."""
 
 from __future__ import annotations
-from support.runtime import build_runtime_namespace
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_runtime_namespace
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,8 +14,8 @@ from src.content_publish_service import ContentPublishService
 from src.http_api import create_http_app
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
-from support.db import build_database
-from support.discord import build_bot, build_forum_channel_tuple_result
+from bridge_test_support.db import build_database
+from bridge_test_support.discord import build_bot, build_forum_channel_tuple_result
 
 
 def _settings() -> SimpleNamespace:

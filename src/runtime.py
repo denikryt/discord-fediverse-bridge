@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
+from .runtime_cleanup import quarantine, release_quarantine
+
+if TYPE_CHECKING:
+    from .discord_bot import BridgeBot
+    from .discord_adapter import DiscordAdapter
 from .community_sync.runtime import CommunityRuntime
 from .bridge_policy import BridgePolicyService
 from .config import Settings
 from .db import Database
-from .discord_bot import BridgeBot
-from .discord_adapter import DiscordAdapter
+from .fluxer_adapter import FluxerAdapter
+from .fluxer_ingress import FluxerInboundHandler
+from .fluxer_rpc_client import FluxerRpcClient
 from .platform_adapters import PlatformAdapterRegistry
 from .content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
+from .content_sync.platform_delivery_scheduler import (
+    ConnectorDispatchCapacity, PlatformPhysicalDeliveryScheduler,
+)
 from .discord_oauth_client import DiscordOAuthClient
 from .content_publish_service import ContentPublishService
 from .fedify_gateway_client import FedifyGatewayClient
@@ -30,8 +40,9 @@ from .personal_feed_discord_delivery_worker import PersonalFeedDiscordDeliveryWo
 class Runtime:
     """Group the shared long-lived services that request handlers and Discord callbacks need.
 
-    All fields are constructed once in app.py and shared across the full bridge
-    process lifetime. No field is optional; absence of a dependency is a startup error.
+    Common services are constructed once in app.py. The selected platform's
+    external owners are present exclusively; absent SDKs are never closed.
+    Failed external owners remain strongly retained until process termination.
     """
 
     # Runtime groups the shared long-lived services that request handlers and
@@ -39,14 +50,19 @@ class Runtime:
     settings: Settings
     database: Database
     fedify_gateway: FedifyGatewayClient
-    discord_oauth_client: DiscordOAuthClient
+    discord_oauth_client: DiscordOAuthClient | None
     content_publish_service: ContentPublishService
     registration_service: RegistrationService
     bridge_policy_service: BridgePolicyService
-    bot: BridgeBot
-    discord_adapter: DiscordAdapter
+    bot: BridgeBot | None
+    discord_adapter: DiscordAdapter | None
+    fluxer_adapter: FluxerAdapter | None
+    fluxer_rpc: FluxerRpcClient | None
+    fluxer_ingress: FluxerInboundHandler | None
     adapter_registry: PlatformAdapterRegistry
-    physical_mutation_coordinator: PlatformPhysicalMutationCoordinator
+    physical_mutation_coordinator: PlatformPhysicalMutationCoordinator | None
+    physical_delivery_scheduler: PlatformPhysicalDeliveryScheduler
+    physical_dispatch_gate: ConnectorDispatchCapacity
     community_runtime: CommunityRuntime
     local_community_runtime: LocalCommunityRuntime
     profile_media_store: ProfileMediaStore
@@ -54,9 +70,20 @@ class Runtime:
     user_actor_follow_service: UserActorFollowService
     user_actor_delivery_service: UserActorDeliveryService
     user_actor_delivery_worker: UserActorDeliveryWorker
-    personal_feed_conversation_runtime: PersonalFeedConversationRuntime
-    personal_feed_discord_delivery_worker: PersonalFeedDiscordDeliveryWorker
+    personal_feed_conversation_runtime: PersonalFeedConversationRuntime | None
+    personal_feed_discord_delivery_worker: PersonalFeedDiscordDeliveryWorker | None
     deployment_state_lease: FileLock
+    runtime_lifetime_lease: FileLock
+    _unclosed_owners: list[tuple[object, BaseException]] = field(default_factory=list, init=False, repr=False)
+
+    def retain_unclosed_owner(self, owner: object, failure: BaseException) -> None:
+        """Keep an unjoined external service alive and prohibit both lease releases.
+
+        HTTP belongs to app.main, outside the Runtime service graph. If its
+        shutdown cannot be confirmed, an otherwise successful SQLite close must
+        not authorize restart or restore while callbacks might still be alive.
+        """
+        self._unclosed_owners.append((owner, failure))
 
     async def close(self) -> None:
         """Join active owners and report all failures without masking the first.
@@ -65,21 +92,42 @@ class Runtime:
         raises. The runtime must still attempt the remaining ordered cleanup,
         retaining cancellation and every independent failure for the caller.
         """
-        errors: list[BaseException] = []
+        errors = [failure for _owner, failure in self._unclosed_owners]
 
         # Close the gate before the first await, even when shutdown itself was
         # entered due to TaskGroup failure. Every later owner is attempted.
         try:
-            self.discord_adapter.close_ingress_admission()
+            # Close physical admission before any awaits; queued direct callers
+            # cannot claim after the runtime enters structured shutdown.
+            self.physical_dispatch_gate.close_admission()
         except BaseException as exc:
             errors.append(exc)
 
+        if self.discord_adapter is not None:
+            try:
+                self.discord_adapter.close_ingress_admission()
+            except BaseException as exc:
+                errors.append(exc)
+        if self.fluxer_ingress is not None:
+            # This gate closes before stopping lanes or disposing SQLite: an
+            # already admitted HTTP callback remains owned until quiesce joins.
+            try:
+                self.fluxer_ingress.close_admission()
+            except BaseException as exc:
+                errors.append(exc)
+
         for operation in (
-            self.discord_adapter.drain_ingress,
-            self.personal_feed_discord_delivery_worker.stop,
+            *((self.fluxer_ingress.quiesce,) if self.fluxer_ingress is not None else ()),
+            *((self.discord_adapter.drain_ingress,) if self.discord_adapter is not None else ()),
+            self.physical_delivery_scheduler.stop,
+            self.physical_dispatch_gate.drain,
+            *((self.personal_feed_discord_delivery_worker.stop,)
+              if self.personal_feed_discord_delivery_worker is not None else ()),
             self.user_actor_delivery_worker.stop,
-            self.discord_adapter.quiesce,
-            self.discord_oauth_client.close,
+            *((self.discord_adapter.quiesce,) if self.discord_adapter is not None else ()),
+            *((self.fluxer_adapter.quiesce,) if self.fluxer_adapter is not None else ()),
+            *((self.fluxer_rpc.close,) if self.fluxer_rpc is not None else ()),
+            *((self.discord_oauth_client.close,) if self.discord_oauth_client is not None else ()),
             self.fedify_gateway.close,
         ):
             try:
@@ -89,15 +137,19 @@ class Runtime:
                 # Fedify/DB failure. Cancellation is preserved, not swallowed.
                 errors.append(exc)
 
-        for operation in (self.database.close, self.deployment_state_lease.close):
+        # SQLite and restore protection share one shutdown boundary. Any failed
+        # owner may still use the DB, so neither lease is released on uncertainty.
+        try:
+            self.database.close()
+        except BaseException as exc:
+            errors.append(exc)
+        if not errors:
             try:
-                operation()
+                self.deployment_state_lease.close()
+                # Release absolutely last, after confirmed DB and deployment close.
+                self.runtime_lifetime_lease.close()
             except BaseException as exc:
                 errors.append(exc)
-
-        if len(errors) == 1:
-            raise errors[0]
         if errors:
-            # The earliest failure remains first and every subsequent error is
-            # visible; Python 3.12 ExceptionGroup preserves traceback chains.
-            raise BaseExceptionGroup('Runtime shutdown failures', errors)
+            raise quarantine(self, errors)
+        release_quarantine(self)

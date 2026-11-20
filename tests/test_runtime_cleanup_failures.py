@@ -1,236 +1,122 @@
-"""Runtime shutdown attempts every owner even when an earlier owner fails."""
-
+"""Real Runtime teardown preserves SQLite protections and every failure cause."""
 from __future__ import annotations
 
-import ast
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-
-def _close_method():
-    """Execute the actual Runtime.close method without requiring Discord SDK imports."""
-    source = Path(__file__).resolve().parents[1] / 'src/runtime.py'
-    module = ast.parse(source.read_text())
-    runtime = next(item for item in module.body if isinstance(item, ast.ClassDef) and item.name == 'Runtime')
-    method = next(item for item in runtime.body if isinstance(item, ast.AsyncFunctionDef) and item.name == 'close')
-    method.decorator_list = []
-    scope = {}
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[])), str(source), 'exec'), scope)
-    return scope['close']
+from bridge_test_support.runtime import runtime_settings
+from src.app import build_runtime
+from src.profile_media import FileLock
+from src.runtime_cleanup import UnsafeRuntimeShutdown
+from src.runtime_ownership import acquire_runtime_lifetime_lease
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('failure', ['ingress', 'feed', 'user', 'io', 'oauth', 'fedify', 'database'])
-async def test_runtime_close_attempts_all_resources_after_one_failure(failure):
-    """Workers, SDK, Fedify, DB and lease all receive cleanup despite one error."""
-    steps = []
-
-    class Owner:
-        """Record the lifecycle boundaries of a real Runtime.close call."""
-
-        def __init__(self, name):
-            self.name = name
-
-        async def _run(self, step):
-            steps.append(step)
-            if step == failure:
-                raise RuntimeError(f'{step} failure')
-
-        def close_ingress_admission(self):
-            steps.append('admission')
-
-        async def drain_ingress(self):
-            await self._run('ingress')
-
-        async def stop(self):
-            await self._run(self.name)
-
-        async def quiesce(self):
-            await self._run('io')
-
-        async def close(self):
-            await self._run(self.name)
-
-    class SyncOwner(Owner):
-        """Record synchronous DB close without inventing async DB cleanup."""
-
-        def close(self):
-            steps.append(self.name)
-            if self.name == failure:
-                raise RuntimeError(f'{self.name} failure')
-
-    world = SimpleNamespace(
-        discord_adapter=Owner('adapter'),
-        personal_feed_discord_delivery_worker=Owner('feed'),
-        user_actor_delivery_worker=Owner('user'),
-        discord_oauth_client=Owner('oauth'),
-        fedify_gateway=Owner('fedify'),
-        database=SyncOwner('database'),
-        deployment_state_lease=SyncOwner('lease'),
-    )
-    with pytest.raises(RuntimeError, match=f'{failure} failure'):
-        await _close_method()(world)
-    assert steps == ['admission', 'ingress', 'feed', 'user', 'io', 'oauth', 'fedify', 'database', 'lease']
-
-
-@pytest.mark.asyncio
-async def test_runtime_close_normal_completion_releases_every_owner():
-    """The no-error path still closes all resources in lifetime order."""
-    steps = []
-
-    class Owner:
-        """Record an ordinary asynchronous service shutdown."""
-
-        def __init__(self, name):
-            self.name = name
-
-        def close_ingress_admission(self):
-            steps.append('admission')
-
-        async def drain_ingress(self):
-            steps.append('ingress')
-
-        async def stop(self):
-            steps.append(self.name)
-
-        async def quiesce(self):
-            steps.append('io')
-
-        async def close(self):
-            steps.append(self.name)
-
-    class SyncOwner(Owner):
-        """Use immediate DB and lease closures like production."""
-
-        def close(self):
-            steps.append(self.name)
-
-    world = SimpleNamespace(
-        discord_adapter=Owner('adapter'),
-        personal_feed_discord_delivery_worker=Owner('feed'),
-        user_actor_delivery_worker=Owner('user'),
-        discord_oauth_client=Owner('oauth'),
-        fedify_gateway=Owner('fedify'),
-        database=SyncOwner('database'),
-        deployment_state_lease=SyncOwner('lease'),
-    )
-    await _close_method()(world)
-    assert steps == ['admission', 'ingress', 'feed', 'user', 'io', 'oauth', 'fedify', 'database', 'lease']
-
-
-@pytest.mark.asyncio
-async def test_runtime_close_reports_primary_and_secondary_failures_in_order():
-    """A failing lease cleanup cannot overwrite the earlier worker-stop failure."""
-    steps = []
-
-    class Owner:
-        """Simulate two independent failures amid the production shutdown order."""
-
-        def __init__(self, step):
-            """Keep the named lifecycle phase for assertions."""
-            self.step = step
-
-        def close_ingress_admission(self):
-            """Close the admission gate even when later steps fail."""
-            steps.append('admission')
-
-        async def drain_ingress(self):
-            """Drain accepted callbacks before either worker."""
-            steps.append('ingress')
-
-        async def stop(self):
-            """Fail exactly the first worker after its join completes."""
-            steps.append(self.step)
-            if self.step == 'feed':
-                raise RuntimeError('first feed failure')
-
-        async def quiesce(self):
-            """Quiesce SDK I/O after worker stop attempts."""
-            steps.append('io')
-
-        async def close(self):
-            """Close an async owned client."""
-            steps.append(self.step)
-
-    class SyncOwner(Owner):
-        """Exercise synchronous DB and lease release boundaries."""
-
-        def close(self):
-            """Raise on the last cleanup to test preservation of the first error."""
-            steps.append(self.step)
-            if self.step == 'lease':
-                raise RuntimeError('final lease failure')
-
-    world = SimpleNamespace(
-        discord_adapter=Owner('adapter'),
-        personal_feed_discord_delivery_worker=Owner('feed'),
-        user_actor_delivery_worker=Owner('user'),
-        discord_oauth_client=Owner('oauth'), fedify_gateway=Owner('fedify'),
-        database=SyncOwner('database'), deployment_state_lease=SyncOwner('lease'),
-    )
-    with pytest.raises(ExceptionGroup) as raised:
-        await _close_method()(world)
-    assert [str(error) for error in raised.value.exceptions] == [
-        'first feed failure', 'final lease failure',
+def _operations(runtime):
+    """List the production cleanup boundaries in their observable order."""
+    return [
+        ("ingress", runtime.discord_adapter, "drain_ingress"),
+        ("scheduler", runtime.physical_delivery_scheduler, "stop"),
+        ("dispatch", runtime.physical_dispatch_gate, "drain"),
+        ("feed", runtime.personal_feed_discord_delivery_worker, "stop"),
+        ("user", runtime.user_actor_delivery_worker, "stop"),
+        ("io", runtime.discord_adapter, "quiesce"),
+        ("oauth", runtime.discord_oauth_client, "close"),
+        ("fedify", runtime.fedify_gateway, "close"),
+        ("database", runtime.database, "close"),
+        ("deployment", runtime.deployment_state_lease, "close"),
+        ("lifetime", runtime.runtime_lifetime_lease, "close"),
     ]
-    assert steps == ['admission', 'ingress', 'feed', 'user', 'io', 'oauth', 'fedify', 'database', 'lease']
+
+
+def _observe(monkeypatch, runtime, steps, failures):
+    """Wrap actual teardown; inject failures before the selected owner closes."""
+    for name, owner, method in _operations(runtime):
+        original = getattr(owner, method)
+        if asyncio.iscoroutinefunction(original):
+            async def run(original=original, name=name):
+                """Record async ownership joins while preserving genuine cleanup."""
+                steps.append(name)
+                if name in failures:
+                    raise failures[name]
+                await original()
+        else:
+            def run(original=original, name=name):
+                """Keep real DB disposal and lock release on successful paths."""
+                steps.append(name)
+                if name in failures:
+                    raise failures[name]
+                original()
+        monkeypatch.setattr(owner, method, run)
 
 
 @pytest.mark.asyncio
-async def test_runtime_close_retains_cancellation_and_secondary_error():
-    """Cancellation during shutdown is not replaced by a late release failure."""
+@pytest.mark.parametrize("failure", ["ingress", "scheduler", "dispatch", "feed", "user", "io", "oauth", "fedify", "database"])
+async def test_runtime_close_attempts_resources_and_retains_both_locks(tmp_path, monkeypatch, failure):
+    """One failed owner cannot skip other resources or authorize restart/restore."""
+    runtime = build_runtime(runtime_settings(tmp_path))
     steps = []
+    try:
+        with monkeypatch.context() as injected:
+            _observe(injected, runtime, steps, {failure: RuntimeError(f"{failure} failure")})
+            with pytest.raises(UnsafeRuntimeShutdown) as raised:
+                await runtime.close()
+        assert [str(e) for e in raised.value.__cause__.exceptions] == [f"{failure} failure"]
+        assert steps == [name for name, _, _ in _operations(runtime)][:-2]
+        with pytest.raises(RuntimeError, match="runtime already active"):
+            acquire_runtime_lifetime_lease(runtime.settings.database_url)
+        with pytest.raises(TimeoutError):
+            FileLock(Path(runtime.settings.deployment_state_lock_path)).acquire(
+                exclusive=True, timeout_seconds=0)
+    finally:
+        # Genuine successful teardown, rather than clearing a test-only global,
+        # is the only way this process may build another runtime after failure.
+        await runtime.close()
 
-    class Owner:
-        """Represent one named close owner with deterministic async failure."""
 
-        def __init__(self, step):
-            """Remember the owning step for the shutdown ordering assertions."""
-            self.step = step
+@pytest.mark.asyncio
+async def test_runtime_close_normal_completion_releases_every_owner(tmp_path, monkeypatch):
+    """Successful shutdown releases deployment then lifetime after real disposal."""
+    runtime = build_runtime(runtime_settings(tmp_path))
+    steps = []
+    with monkeypatch.context() as observed:
+        _observe(observed, runtime, steps, {})
+        await runtime.close()
+    assert steps == [name for name, _, _ in _operations(runtime)]
+    with acquire_runtime_lifetime_lease(runtime.settings.database_url):
+        with FileLock(Path(runtime.settings.deployment_state_lock_path)).acquire(
+            exclusive=True, timeout_seconds=0):
+            pass
 
-        def close_ingress_admission(self):
-            """Close callback admission before any awaited operation."""
-            steps.append('admission')
 
-        async def drain_ingress(self):
-            """Complete callback draining."""
-            steps.append('ingress')
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_runtime_close_retains_primary_and_secondary_errors(tmp_path, monkeypatch, cancel):
+    """A later DB error cannot overwrite the worker error or cancellation."""
+    runtime = build_runtime(runtime_settings(tmp_path))
+    first = asyncio.CancelledError() if cancel else RuntimeError("first feed failure")
+    last = RuntimeError("database failure")
+    try:
+        with monkeypatch.context() as injected:
+            _observe(injected, runtime, [], {"feed": first, "database": last})
+            with pytest.raises(UnsafeRuntimeShutdown) as raised:
+                await runtime.close()
+        assert raised.value.__cause__.exceptions == (first, last)
+    finally:
+        await runtime.close()
 
-        async def stop(self):
-            """Model a cancelled stop after the worker has been joined."""
-            steps.append(self.step)
-            if self.step == 'feed':
-                raise asyncio.CancelledError()
 
-        async def quiesce(self):
-            """Complete SDK I/O teardown."""
-            steps.append('io')
-
-        async def close(self):
-            """Complete client teardown."""
-            steps.append(self.step)
-
-    class SyncOwner(Owner):
-        """Represent database and deployment lease release."""
-
-        def close(self):
-            """Inject a later cleanup error without overwriting cancellation."""
-            steps.append(self.step)
-            if self.step == 'lease':
-                raise RuntimeError('lease failure')
-
-    world = SimpleNamespace(
-        discord_adapter=Owner('adapter'),
-        personal_feed_discord_delivery_worker=Owner('feed'),
-        user_actor_delivery_worker=Owner('user'),
-        discord_oauth_client=Owner('oauth'), fedify_gateway=Owner('fedify'),
-        database=SyncOwner('database'), deployment_state_lease=SyncOwner('lease'),
-    )
-    with pytest.raises(BaseExceptionGroup) as raised:
-        await _close_method()(world)
-    assert isinstance(raised.value.exceptions[0], asyncio.CancelledError)
-    assert str(raised.value.exceptions[1]) == 'lease failure'
-    assert steps == ['admission', 'ingress', 'feed', 'user', 'io', 'oauth', 'fedify', 'database', 'lease']
+@pytest.mark.asyncio
+async def test_failed_deployment_unlock_cannot_release_lifetime_lease(tmp_path, monkeypatch):
+    """Even after successful SQLite disposal, deployment release is ordered."""
+    runtime = build_runtime(runtime_settings(tmp_path))
+    try:
+        with monkeypatch.context() as injected:
+            _observe(injected, runtime, [], {"deployment": RuntimeError("unlock refused")})
+            with pytest.raises(UnsafeRuntimeShutdown):
+                await runtime.close()
+        with pytest.raises(RuntimeError, match="runtime already active"):
+            acquire_runtime_lifetime_lease(runtime.settings.database_url)
+    finally:
+        await runtime.close()

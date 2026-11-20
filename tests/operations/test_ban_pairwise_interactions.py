@@ -15,9 +15,9 @@ from src.operations import (
     ban_user_operation,
     unban_user_operation,
 )
-from support.ban_effects import assert_ban_effects, collect_ban_effects
-from support.ban_interactions import BAN_INTERACTION_CASES, BanInteractionCase
-from support.db import build_database
+from bridge_test_support.ban_effects import assert_ban_effects, collect_ban_effects
+from bridge_test_support.ban_interactions import BAN_INTERACTION_CASES, BanInteractionCase
+from bridge_test_support.db import build_database
 
 
 def _settings(case: BanInteractionCase) -> SimpleNamespace:

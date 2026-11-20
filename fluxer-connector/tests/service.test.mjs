@@ -1,0 +1,168 @@
+/** Node SDK session → authenticated event HTTP and authenticated RPC lifecycle. */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {EventEmitter} from 'node:events';
+import {createServer} from 'node:http';
+import {FluxerNodeService} from '../src/service.ts';
+
+async function receiver() {
+  const events=[];
+  const server=createServer(async(req,res)=>{
+    let buf='';for await(const chunk of req) buf+=chunk;
+    events.push({body:JSON.parse(buf),auth:req.headers.authorization});
+    res.writeHead(200,{'content-type':'application/json'});res.end('{"accepted":true}');
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  return {events,port:server.address().port,stop:()=>new Promise(resolve=>server.close(resolve))};
+}
+function setup(receiverPort,{wrongApi=false,loginError=false,rpcPort}={}) {
+  const emitter=new EventEmitter();
+  const calls=[];
+  const client={on:emitter.on.bind(emitter),off:emitter.off.bind(emitter),
+    instance:{endpoints:{api_public:wrongApi?'https://wrong.test':'https://api.example.test/'}},
+    rest:{baseUrl:wrongApi?'https://wrong.test/v1':'https://api.example.test/v1'},
+    user:undefined,
+    async login(token) {
+      calls.push(['login',token]);
+      if(loginError)throw new Error('secret provider failure');
+      this.user={id:'bot-1',bot:true};emitter.emit('ready');
+    },
+    async destroy(){calls.push(['destroy']);},
+  };
+  const service=new FluxerNodeService({connectorKey:'fx',origin:'https://example.test',
+    apiPublic:'https://api.example.test/',botToken:'bot-secret',
+    transportSecret:'private-secret',rpcPort,
+    pythonIngressUrl:`http://127.0.0.1:${receiverPort}/internal/fluxer/events`,
+    createVettedClient:async()=>client,
+    execute:async(operation,args)=>{calls.push([operation,args]);return {id:args.id};},
+  });
+  return {service,emitter,calls,client};
+}
+const request=(port,operation,token='private-secret')=>fetch(`http://127.0.0.1:${port}/rpc`,{
+  method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},
+  body:JSON.stringify({connector_key:'fx',operation,args:{id:'chan-1'}})});
+
+test('one verified SDK client serves bot RPC while Gateway events reach private HTTP', async()=>{
+  const python=await receiver();const {service,emitter,calls}=setup(python.port);
+  try {
+    const port=await service.start();
+    assert.equal((await request(port,'fetch_channel')).status,200);
+    emitter.emit('messageDelete',{id:'m1',channelId:'thread-1'});
+    await service.close();
+    assert.equal(python.events.length,1);
+    assert.equal(python.events[0].body.type,'MessageDeleted');
+    assert.equal(python.events[0].auth,'Bearer private-secret');
+    assert.equal(calls.filter(([name])=>name==='login').length,1);
+    assert.equal(calls.filter(([name])=>name==='destroy').length,1);
+    assert.equal(emitter.listenerCount('messageDelete'),0);
+  } finally {await python.stop();}
+});
+test('SDK disconnect disables physical RPC without losing health diagnostics',async()=>{
+  const python=await receiver();const {service,emitter}=setup(python.port);
+  try {
+    const port=await service.start();
+    emitter.emit('shardDisconnect',0,1006);
+    assert.equal((await request(port,'fetch_channel')).status,503);
+    const health=await (await request(port,'health')).json();
+    assert.equal(health.result.state,'degraded');
+    assert.equal(health.result.instance_origin,'https://example.test');
+    emitter.emit('shardReady',0);
+    const after=await (await request(port,'health')).json();
+    assert.equal(after.result.gateway_gap,true);
+    assert.equal((await request(port,'fetch_channel')).status,200);
+    await service.close();
+  } finally {await python.stop();}
+});
+test('a latched Gateway replay gap denies every write without calling any SDK executor',async()=>{
+  const python=await receiver();const {service,emitter,calls}=setup(python.port);
+  try {
+    const port=await service.start();
+    assert.equal((await request(port,'create_forum_thread')).status,200);
+    emitter.emit('shardDisconnect',0,1006);
+    emitter.emit('shardReady',0);
+    const health=(await (await request(port,'health')).json()).result;
+    assert.equal(health.state,'ready');
+    assert.equal(health.gateway_gap,true);
+    const before=calls.length;
+    for(const op of ['create_forum_thread','create_reply_thread','send_message',
+                     'edit_message','delete_message']) {
+      assert.equal((await request(port,op)).status,503,op);
+    }
+    assert.equal(calls.length,before,'gap must deny writes at the Node SDK boundary');
+    assert.equal((await request(port,'fetch_channel')).status,200);
+  }finally{await service.close();await python.stop();}
+});
+
+test('live SDK identity drift degrades health and denies all writes until it matches login proof',async()=>{
+  const python=await receiver();const {service,client,calls}=setup(python.port);
+  try {
+    const port=await service.start();
+    assert.equal((await request(port,'send_message')).status,200);
+    const original=client.user;
+    for(const unexpected of [{id:'bot-B',bot:true},{id:'bot-1',bot:false},
+                             {id:'',bot:true},undefined]) {
+      client.user=unexpected;
+      assert.equal((await (await request(port,'health')).json()).result.state,'degraded');
+      const before=calls.length;
+      for(const op of ['create_forum_thread','create_reply_thread','send_message',
+                       'edit_message','delete_message']) {
+        assert.equal((await request(port,op)).status,503,op);
+      }
+      assert.equal(calls.length,before,'no executor call under identity drift');
+      assert.equal((await request(port,'fetch_channel')).status,200);
+    }
+    client.user=original;
+    assert.equal((await (await request(port,'health')).json()).result.state,'ready');
+    assert.equal((await request(port,'edit_message')).status,200);
+  }finally{await service.close();await python.stop();}
+});
+
+test('endpoint mismatch prevents login, RPC and Gateway while ensuring client teardown',async()=>{
+  const python=await receiver();const {service,calls}=setup(python.port,{wrongApi:true});
+  try {
+    await assert.rejects(service.start(),/initialization refused/);
+    assert.deepEqual(calls,[['destroy']]);
+    assert.equal(python.events.length,0);
+  } finally {await python.stop();}
+});
+
+test('RPC port collision after SDK login closes the SDK without claiming a running server',async()=>{
+  const python=await receiver();
+  const busy=createServer((_req,res)=>res.end());
+  await new Promise(resolve=>busy.listen(0,'127.0.0.1',resolve));
+  const port=busy.address().port;
+  const {service,calls}=setup(python.port,{rpcPort:port});
+  try {
+    await assert.rejects(service.start(),/initialization refused/);
+    assert.equal(calls.filter(([name])=>name==='login').length,1);
+    assert.equal(calls.filter(([name])=>name==='destroy').length,1);
+  } finally {
+    await new Promise(resolve=>busy.close(resolve));
+    await python.stop();
+  }
+});
+
+test('an unknown inbound forum parent is diagnostic, never permanent outbound RPC disablement',async()=>{
+  const python=await receiver();const {service,emitter, calls}=setup(python.port);
+  try {
+    const port=await service.start();
+    emitter.emit('messageCreate',{id:'msg-unclaimed',channelId:'thread-unknown',
+      guildId:'guild-1',type:0,content:'foreign',
+      author:{id:'human',username:'Human',bot:false},attachments:new Map(),
+      createdAt:new Date('2026-10-28T00:00:00Z')});
+    // Allow the accepted event to complete before checking RPC readiness.
+    for(let n=0;n<100 && python.events.length===0;n++) {
+      await new Promise(resolve=>setTimeout(resolve,5));
+    }
+    const health=await (await request(port,'health')).json();
+    assert.equal(health.result.state,'ready');
+    assert.equal(health.result.gateway_context_unverified,true);
+    assert.equal((await request(port,'fetch_channel')).status,200);
+    await service.close();
+    assert.equal(python.events.length,1);
+    assert.equal('parent_channel' in python.events[0].body,false);
+    assert.equal('thread_context' in python.events[0].body,false);
+    // SDK unavailable context must not be mistaken for a broken outbound session.
+    assert.equal(calls.filter(([op])=>op==='login').length,1);
+  }finally{await service.close();await python.stop();}
+});

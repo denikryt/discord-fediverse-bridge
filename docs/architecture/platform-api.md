@@ -45,6 +45,73 @@ Before a create, the concrete adapter calls `validate_create_attempt(attempt, op
 
 `ContentDocument` is neutral body/portable Markdown, optional title/link and `AttachmentRef` URL metadata, not an SDK File/native reply reference. The adapter renders links, mentions and supported attachments, handles platform size/tags/uploads, and disables unsolicited mention pings on mirrored content. `DeliveryPresentation('bot'|'webhook')` asks for one actual send mode; unsupported webhook mode must fail explicitly, never silently fall back to bot. Visual webhook labels are not ActivityPub author identities.
 
+## Fluxer bot Create transport admission (Checkpoint 015)
+
+`src/fluxer_adapter.py` now implements bot-only forum-thread and message Creates
+through the authenticated Python→Node RPC contract. This is a complete adapter
+**Create admission and receipt-validation boundary**, not an implementation of
+Fluxer REST inside Node. An explicit, test-only owned forum is exercised through
+SQLite `PlatformFanoutCoordinator`, its committed `CreateAttempt` claim, one
+RPC provider write, separately verified thread/starter IDs and persisted
+physical copy. A missing response or mismatched success receipt remains
+`unresolved`, never an invitation for another POST. Reserved fanout attempt
+keys require a one-use permit issued from an authenticated committed SQLite
+claim; a persisted terminal proof alone allows eviction of the local flight.
+Concurrent callers for an identical direct attempt share the same in-process
+result, whereas changed physical destination, content or mode is refused.
+
+This adapter rejects webhook presentation, unsupported rich content and
+unverified required forum tags before a write. Reads and rights checks must
+confirm the logged-in bot and target forum; replies must reference an existing
+message within the exact destination container. The private write envelope
+includes `allowed_mentions.parse=[]` and never supplies Discord numeric IDs.
+Message-root threading remains explicitly unsupported until its native Fluxer
+contract can be confirmed. Bot-owned physical Edit/Delete are handled by the
+Checkpoint 016 read-before-write boundary: exact `MessageRef` and bot authorship
+are verified with a current physical lookup, followed by exact channel ACL and
+mutation capability checks. Only then may one private RPC write be issued;
+malformed write ACKs and transport uncertainty propagate to the existing
+SQLite mutation coordinator, which alone decides the durable unknown-effect
+fence. Quiesce joins admitted mutation calls before resources close.
+Node SDK REST mapping, live Gateway and production composition **are not
+implemented by this step**;
+the fake provider validates this internal contract, not the real Fluxer API.
+
+## Fluxer bot-owned physical reads
+
+The Fluxer adapter uses authenticated Node RPC `health` to verify the current
+SDK READY bot ID **and authenticated instance origin** for the exact connector; a configured or cached bot ID alone
+cannot confer physical message ownership. The Node SDK read returns explicit
+`webhook_id` provenance from `Message.webhookId` alongside the exact physical
+message/container and author. Only the same bot ID, kind `bot`, a READY RPC
+session, and explicit `webhook_id: null` allow
+`MessageView.author.is_bridge_owned=True`. A different identity after sidecar
+restart, missing provenance, or a webhook does not pass the mutation
+coordinator's existing read-only ownership preflight. The normal durable
+revision/CAS/unknown-effect rules remain unchanged; this does not activate
+Fluxer→ActivityPub canonical mutation before issue #13.
+
+## Fluxer capability and forum-tag observation
+
+`capabilities` reads the requested exact channel through the pinned Fluxer
+SDK and, for forums, reads the raw channel again through the SDK REST client's
+`Routes.channel` endpoint. This prevents an SDK cached `availableTags` or
+synthesized `flags=0` from proving what the server returned in a fresh
+response. The authenticated RPC includes the observed `requires_tag`,
+`available_tags` and `moderated` fields only when the raw metadata validates;
+`tag_requirements_verified=false` otherwise. This proof of returned metadata
+is **not** a proof that the current unpinned Fluxer build can accept a forum
+POST, starter-message receipt, thread reply, media or mutation. Consequently
+production capabilities for these writes remain `false` until live capture.
+
+The opt-in `forum_applied_tags` setting associates selected tag IDs with one
+physical forum, and adapter preflight refuses unknown, removed, duplicate or
+moderated tags without a verified moderator authorization. A forum requiring
+any tag cannot be posted untagged; no arbitrary tag ID is manufactured. The
+SDK permission bitfield currently does not expose the server's thread-specific
+send bit: a generic SendMessages grant alone leaves thread send `unknown`.
+This check has no effect on Discord policy, DB ownership or issue #13 gating.
+
 ## Inbound Gateway event family
 
 `ThreadCreated`, `ThreadUpdated`, `ThreadDeleted`, `MessageCreated`, `MessageUpdated`, `MessageDeleted` are frozen, connector-scoped platform events; they are **not** Fedify/ActivityPub events. Each has diagnostic, timezone-aware `received_at` and optional `external_guild_id`; the API rejects naive or non-datetime timestamps. `MessageUpdated.edited_at` and `MessageView.edited_at` require timezone-aware `datetime` when known, with `None` meaning an unknown edit time. Discord adapter integration extends `MessageCreated.created_at` to preserve the actual source message creation instant separately from diagnostic `received_at`; its optional absence keeps generic transport fakes valid, but Discord publication must obtain the source timestamp. `MessageUpdated.author` is optional best-effort `AuthorRef` metadata, rejected if its connector differs from the edited message; a missing author is not inferred from a raw cache-less edit. A resolved `thread_context` must share the message's immediate container, and any accompanying `parent_channel` must identify the same physical channel without contradicting its known kind/guild metadata. Event `external_guild_id` is checked against **both** available channel contexts, even when the first has unknown metadata. A reply reference may point into another container for Discord `THREAD_STARTER_MESSAGE`; this is not an outbound reply permission. Raw message updates/deletes require no parent channel, cache or network fetch. Missing `MessageUpdated.content is None` is **not** empty content; `ContentDocument(body='')` means explicit empty content. `ThreadCreated.newly_created=None` and `MessageCreated.is_starter=None` mean unknown, not false.
@@ -66,6 +133,68 @@ All three create operations take a core-generated `CreateAttempt(key, connector_
 `PlatformOperationError(reason='unknown_delivery')` is the **only** uncertain-create classification; other reasons are `not_found`, `forbidden`, `unsupported`, `invalid_request`, `rate_limited`, `unavailable`. A response may have been lost after the remote object was committed. `reconcile_create(attempt)` is a side-effect-free read that returns a verified `CreatedThread` (forum), `CreatedMessage` (message), `ThreadRef` (reply thread), or `None` (**unresolved**, not confirmed non-delivery). A known receipt must match connector, target and operation. For forum/message creates it additionally needs a provable link to the exact attempt; matching title/body/timestamps or a negative history scan is not proof. Discord message `nonce`/`enforce_nonce` is time-limited and does not give a documented safe retry deadline; forum creation has no matching documented uniqueness contract. `None` never triggers blind create replay. No Platform API contract fake claims to implement durable fan-out's durable recovery workflow.
 
 **Personal Feed exception:** Discord threads created *from* an existing text/announcement-channel root message share its ID; there can be only one. A verified existing `ThreadRef` with the root ID, correct parent connector/channel and compatible thread kind can be adopted even when it predates the attempt. This is proof of the intended **target**, not proof the current attempt created it. `create_reply_thread` may return such a preexisting thread rather than issuing a second create; `reconcile_create` may return it when verified with a network/platform lookup. The exception never extends to forum posts or arbitrary messages, nor does it authorize sending a reply without permissions. Other platforms must verify any equivalent guarantee rather than assuming Discord semantics.
+
+## Fluxer-only private ingress (implementation in progress)
+
+`src/internal_fluxer_api.py` verifies a private bearer before reading a bounded
+request body, then strictly reconstructs **neutral** `ThreadCreated`,
+`ThreadUpdated`, `ThreadDeleted`, `MessageCreated`, `MessageUpdated` or
+`MessageDeleted` wire DTOs. The HTTP layer checks only connector identity and
+structure; `FluxerInboundHandler` exclusively resolves forum ownership using
+persisted connector-scoped physical evidence, including ID-only mutations. A
+single runtime-owned admission gate joins accepted calls before SQLite closes.
+The exact `MULTIPLATFORM_FLUXER_COMMUNITY_BINDING_PENDING` gate emits no
+ActivityPub objects until issue #13 supplies canonical source binding and
+connector-aware human authorization. Node SDK normalization and production
+composition are not yet implemented; route tests do not claim live Gateway
+integration.
+
+## Trusted Fluxer connector identity admission
+
+The Python `FluxerConnectorConfig` carries one canonical operator-approved
+origin, connector key, loopback-only private RPC address and separately redacted
+IPC bearer. It **does not** carry a Fluxer bot credential. The JSON parser
+rejects additional instances and legacy `bot_token` fields; on live runtime
+construction, the repository checks the already saved Fluxer row before
+registering or reusing exactly one immutable identity. Different saved keys
+or origins are rejected before any SDK initialization and are never silently
+rekeyed or deleted. Disabled deployments create no new Fluxer row. The SQLite
+partial unique origin index remains a separate integrity guard; it does not
+substitute for this one-instance admission. The standalone Node SDK service alone
+reads the bot token from a read-only secret file; no bearer bot credential
+crosses `PlatformAdapterPort` or the Python RPC boundary.
+
+## Connector Create pre-claim admission
+
+Before `PlatformDeliveryIntentRepository.claim()` reserves a physical Create,
+`PlatformFanoutCoordinator.deliver()` reads its frozen request and resolves the
+exact registered connector (including its optional readiness predicate).
+Absent/degraded transport leaves the immutable intent `pending` with no dispatch
+lease or token. The subsequent transaction compare-checks request/fingerprint,
+so a concurrent update cannot dispatch stale admission. Only the *live* owner
+may release an exact token to `pending` before entering the adapter operation.
+Once the call may have entered the physical SDK, cancellation and a lost HTTP
+response remain persistently `unresolved`; an expired lease never proves that
+another POST is safe. This coordinator change is independent of the later
+connector-isolated scheduler integration.
+
+## Runtime-owned physical connector capacity
+
+The runtime creates exactly one per-connector `ConnectorDispatchCapacity` shared
+by its `PlatformFanoutCoordinator`, `PlatformPhysicalMutationCoordinator`, and
+short-lived `from_adapter()` Create coordinators bound to the live adapter.
+Each slot must be acquired **before** a durable dispatch claim and held across
+transport settlement; a recovery lane does not claim a second queued operation
+while an immediate send occupies its connector. Independent connectors retain
+independent progress. Runtime shutdown closes new capacity admission, joins
+already accepted direct calls, and only then disposes adapters and SQLite.
+
+An exact parent receipt materializes eligible blocked child intents into SQLite
+and wakes connector lanes. It **does not await child HTTP** inside the parent's
+receipt completion. Lost wakes are recovered by the existing periodic scan;
+callers awaiting a parent receipt must observe the child's own durable status
+before assuming its physical delivery finished. This is a permanent scheduling
+rule, not a compatibility fallback or a second queue.
 
 ## Durable physical Create dispatch and cache ACK
 
@@ -234,3 +363,199 @@ target, current forum owner and policy before entering the write method.
 Ownership refusal is a durable pre-send failure; unknown write outcomes retain
 the existing unresolved barrier. Permission to manage a message is not evidence
 that the bridge owns it.
+
+## Connector-scoped physical mutation candidates (Fluxer Support, partial)
+
+Before a physical edit or delete, the mutation coordinator traverses existing
+copy tables in stable-ID pages and renders an immutable read-only candidate.
+An adapter's exact message and bridge-owned author are verified **before**
+the SQLite `dispatching` claim. Each free dispatch slot may CAS-claim only one
+still-current `(revision, canonical snapshot, physical MessageRef, owner)`;
+no batch of physical writes is preclaimed. A failed or cancelled read can
+leave the row untouched without creating an uncertain physical effect. Once
+the adapter write method is entered, interrupted/ambiguous writes remain
+fenced as `unresolved`; expiry never authorizes blind replay. Deterministic
+invalid snapshots/foreign ownership are recorded before any physical claim
+and do not starve independent later-ID copies. The scanner retains only a
+bounded candidate page and rotates across the four copy families. This
+module-level safety does **not** yet provide the runtime-owned multi-connector
+scheduler, shared direct-path admission, or full per-connector concurrency
+bounds; those remain pending Checkpoint 5 integration.
+
+
+## Bounded mutation scans and explicit re-admission
+
+Mutation discovery reads at most one page of 32 physical-copy rows from each
+of the four existing copy families per connector sweep. Process-local cursors
+resume pagination across ticks and rotate family priority; every page is
+read-only and holds no durable claim. This prevents an arbitrarily large
+backlog of already-settled historical copies from monopolizing a connector.
+
+A definitive **pre-write** refusal is stored on the existing copy as
+`failed_definite` and tied to its canonical revision. That same revision is
+not reevaluated on every periodic scheduler tick and cannot be directly
+CAS-claimed. A newer canonical revision becomes eligible normally; an
+operator or current-policy revalidation may explicitly call
+`readmit_failed_revision(...)` for that exact connector, copy and revision
+after current owner/policy checks. Unavailable transports and failed remote
+reads before a claim remain recoverable without this manual action. An
+unknown-effect `unresolved` mutation is never re-admitted by this method.
+
+## Connector-isolated physical recovery (Fluxer Support, partial)
+
+`PlatformPhysicalDeliveryScheduler` is the single runtime-owned task supervisor
+for connector-scoped durable physical Create and mutation recovery. Each
+configured connector has one bounded lane; no lane awaits another connector's
+network calls. The shared intent repository filters recovery candidates using
+persisted `connector_id`, and mutation read-only scans likewise filter on
+current connector identity. The scheduler is disabled for physical work until
+its adapter reports readiness and is joined before `DiscordAdapter.quiesce()`
+or SQLite close. A missed wake is recovered by periodic polling, not by an
+additional durable queue. The former Discord Personal Feed worker no longer
+owns generic community Create/mutation recovery; it continues handling
+Discord Personal Feed-specific work.
+
+The currently constructed production runtime contains only the existing
+Discord connector lane. Node Fluxer SDK registration, same-capacity admission
+for direct Create/mutation calls, and notification-based cross-connector child
+wake remain pending; this does not yet establish complete Checkpoint 5.
+
+## Fluxer private outbound RPC (Checkpoint 1 implementation in progress)
+
+`FluxerRpcClient` sends one connector-scoped authenticated JSON request to the
+configured private Node service at `/rpc`. Its own operation allowlist, 256 KiB
+request limit, 1 MiB response limit, disabled redirects/proxy inheritance, and
+strict matching response connector are enforced before an adapter adopts a
+transport result. This `/rpc` envelope belongs exclusively to the bridge; it
+is **not** a guessed Fluxer REST endpoint. The Node sidecar will translate it
+using a pinned Fluxer SDK. A failed or malformed response to a side-effecting
+RPC remains `unknown_delivery` and is never automatically retried by Python.
+RPC task admission is closed and already admitted RPC calls are joined before
+its HTTP client is disposed. This is a local contract boundary only: Node SDK
+operation handlers and live forum/Gateway verification remain unfinished.
+
+## Fluxer private Node RPC listener (Checkpoint 1 implementation in progress)
+
+`fluxer-connector/src/transport.ts` is a loopback-only, bearer-authenticated
+listener matching Python's private `/rpc` envelope. Before calling a provider
+handler it verifies the requested method against the explicit allowlist and
+checks the configured connector key, body size and JSON shape. Its admission
+limit bounds active private requests; `close()` rejects new requests and joins
+accepted ones. Unknown SDK/provider failures are returned without raw exception
+text or bot credentials. Node's SDK handler, reproducible `npm` lockfile and
+Fluxer live discovery/transport are still unimplemented: the loopback test
+provider under `fluxer-connector/tests/` is intentionally **not** a Fluxer
+REST implementation and cannot justify a live transport acceptance result.
+
+## Fluxer discovery preflight (Checkpoint 1 implementation in progress)
+
+`fluxer-connector/src/discovery.ts` implements a tokenless,
+redirect-disabled, bounded `/.well-known/fluxer` request. Its discovery socket
+uses the address accepted by its DNS/SSRF policy (no second lookup during that
+request); it requires a documented `endpoints.api_public` rather than falling
+back to the first-party `api` or `api_client` values. A split API host requires
+an explicit configured hostname allowlist. Loopback HTTP is confined to an
+explicit test opt-in. **This secures only the preflight discovery request**:
+until the SDK itself is installed and its subsequent REST/Gateway egress can
+be constrained and verified, the implementation must not treat discovery
+success as permission to send the bot token to arbitrary discovered endpoints.
+
+## Fluxer scoped lookup adapter (Checkpoint 2 implementation in progress)
+
+`src/fluxer_adapter.py:FluxerAdapter` currently implements *only* the
+`PlatformLookupPort` portion of the future complete `PlatformAdapterPort`. Its
+`fetch_channel`, `fetch_thread` and `fetch_message` checks require exact remote
+physical identity, thread parent, known guild and separately observed starter
+message before returning neutral DTOs. Technical capabilities are granted only
+when the private provider's reply matches the requested channel scope; webhook
+capabilities are false unconditionally. Permission grants require the attested
+bot ID plus exact channel/guild; absent or mismatched metadata is `unknown`.
+`reconcile_create()` has no verified attempt-correlated provider receipt yet
+and returns `None` without a history/body heuristic. The class is intentionally
+not registered in production until its write methods, durable coordinator proof
+and SDK-backed operation handlers exist; these read tests are not live Fluxer
+acceptance.
+
+For complete Fluxer REST messages, guild scope is established by a fresh
+guild-container lookup, not by requiring a message-level guild_id that the
+server omits. A non-null SDK message guild must still match that container.
+Message and bot ownership checks retain exact container/author IDs and explicit
+SDK webhook provenance. Forum POST receipts use the returned thread guild and
+parent plus the embedded starter's own ID/container/content/author; the raw
+Message schema allows omitted/null webhook_id but never a webhook bot receipt.
+Observed thread/starter IDs may be equal and are never substituted for one
+another when a field is absent.
+
+## Fluxer forum create, SDK REST and receipt boundary (live acceptance pending)
+
+The Node `fluxer-connector/src/forum_create.ts` defines one checked bot forum
+POST on the **existing official SDK REST client**. The SDK v3.3.0
+`ThreadManager.createPost()` drops the response's included starter message
+while returning its `ThreadChannel`; the narrow handler keeps the original
+thread response and independently checks the `message.id`, immediate
+`message.channel_id`, forum parent, guild, current SDK bot author and absence
+of webhook provenance. This is not an alternative REST stack or a durable
+Create claimant. A malformed response after POST yields `unknown_delivery`
+rather than an inferred `starter_id` or permission to retry. Python's existing
+`FluxerAdapter` still owns the immutable `CreateAttempt` and verified receipt.
+
+This handler is exercised only in isolated SDK-edge tests. The production
+Node entrypoint continues to refuse Create and advertises
+`forum_posts=False` until the exact trusted server build's forum POST, starter
+and operation-specific ACL behavior are captured live. The current server ZIP
+is unversioned and does not satisfy that acceptance gate. Issue #13's Fluxer
+inbound publication gate remains unchanged.
+
+## Fluxer message/reply physical delivery (SDK-edge acceptance only)
+
+`fluxer-connector/src/message_send.ts` maps the existing `send_message` RPC to
+the official SDK v3.3.0 `ChannelManager.send` method with one immutable
+`MessageSendOptions.replyTo` pointing at a **verified message in the same
+immediate container**. The SDK owns the wire `message_reference` mapping.
+Explicit `allowedMentions: {parse: [], repliedUser: false}` prevents new
+everyone, role, user and automatic reply notifications. Missing/cross-thread
+parents, unknown SDK bot rights, archived/locked targets and unsupported
+attachments reject before the SDK send. A returned mismatched parent, bot,
+message or container after entering send becomes `unknown_delivery`, never a
+flat-send fallback or permission to resend. The Node/Python test fixture
+models remote effects but does not enable a production write dispatcher.
+
+The supplied unversioned server source identifies the separate bit 38
+`SEND_MESSAGES_IN_THREADS`; until the actual approved build verifies this
+contract, the production SDK `capabilities.thread_replies` remains false.
+
+
+## Fluxer bot-owned physical mutation executor (live acceptance pending)
+
+`fluxer-connector/src/message_mutations.ts` implements Node SDK-edge Edit/Delete
+via the official SDK v3.3.0 `Message.edit()` / `Message.delete()` methods.
+The executor re-fetches the exact physical message and container through the
+SDK, verifies current authenticated bot authorship and explicit non-webhook
+provenance, and rechecks effective ViewChannel/ReadMessageHistory permissions
+before entering the write method. Returned edits must attest the same message
+and the full requested text; malformed successful results and uncertain REST
+writes are not acknowledged as completed mutations. Existing Python
+`FluxerAdapter` and `PlatformPhysicalMutationCoordinator` remain responsible
+for identity, claim and applied-revision fencing; no second mutation queue is
+introduced. This behavior is exercised by real private RPC and Python/SQLite
+scenarios over a stateful fake SDK edge; the actual installed SDK/live Fluxer
+server and production write activation remain unverified.
+
+
+## Shared runtime Fluxer dispatch admission
+
+An enabled Python `FluxerAdapter` is registered by the same `src/app.py`
+registry as Discord, but begins offline. The connector's recovery lane polls
+bearer-authenticated Node SDK health, exact instance origin and current bot ID.
+A reconnecting, unavailable or re-bound session cannot obtain a fresh Create
+claim. Physical direct `PlatformFanoutCoordinator.from_adapter` calls inherit
+the runtime's one connector slot, which is also used by scheduler Create,
+read-only reconciliation and mutation paths. An offline `unresolved` intent
+is not reconciled or retried without positive proof. Candidate discovery for
+mutation dispatch filters connector identity in SQLite before pagination,
+so unrelated lower-ID copies cannot exhaust another connector's pages.
+
+Fluxer physical copy mutation remains subject to the canonical owner and
+separate policy/read-only ownership preflight. Existing Discord-specific
+source/community policy is not implicitly granted to Fluxer, and no Fluxer
+human canonical publication is activated until issue #13.

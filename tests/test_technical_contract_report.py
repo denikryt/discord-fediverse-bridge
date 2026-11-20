@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from support.technical_contract_manifest import TECHNICAL_CONTRACT_ENTRIES
+from bridge_test_support.technical_contract_manifest import TECHNICAL_CONTRACT_ENTRIES
 from tools.gateway_contract_runner import merge_status
 from tools.technical_contract_report import build_report
 

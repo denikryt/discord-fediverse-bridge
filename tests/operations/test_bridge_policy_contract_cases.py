@@ -10,15 +10,15 @@ import pytest
 from src.bridge_policy import BridgePolicyService, PolicyType
 from src.operations import ManageBridgePolicyInput, manage_bridge_policy_operation
 from src.user_bans import UserBanService
-from support.bridge_policy_contracts import (
+from bridge_test_support.bridge_policy_contracts import (
     BRIDGE_POLICY_CONTRACT_CASES,
     BridgePolicyContractCase,
 )
-from support.bridge_policy_effects import (
+from bridge_test_support.bridge_policy_effects import (
     assert_bridge_policy_effects,
     collect_bridge_policy_effects,
 )
-from support.db import build_database
+from bridge_test_support.db import build_database
 
 
 _POLICY_ALIASES = {

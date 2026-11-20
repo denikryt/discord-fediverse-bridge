@@ -1,3 +1,129 @@
+## Fedify CI Python fixture setup — fixed and VM verified (2026-11-20)
+
+PR #25's Fedify job failed because the publication fixture invoked a missing
+`../.venv/bin/python`. Publication/empty SQLite fixtures now use `node:sqlite`,
+with the existing scenarios run from an isolated working directory as a regression.
+The full suite also intentionally validates payloads with Python's real schema;
+the Fedify matrix job now installs its own frozen Python environment. Red/green
+fixture verification and all 52 gateway scripts passed in the VM. Changes are
+verified in the VM; the next GitHub Actions result remains pending.
+
+## Plan 145 F3 — crash-fixture acceptance barrier (fixed locally, 2026-11-19)
+
+The P0 accepted-Create/SIGKILL test used existence of a physical JSONL file
+as its acceptance barrier, but `open(..., 'a')` made that path visible before
+writing or fsync. A controlled pause between open and write reproduced a false
+crash point. The provider now writes/fsyncs a sibling temporary file and
+atomically replaces the acceptance marker; the test blocks publication until
+the parent verifies the marker is absent, then releases and SIGKILLs only
+after reading one complete record. The existing SQLite claim, cold recovery,
+lease-expiry and no-repost assertions are preserved. This fixes test
+synchronization only; production delivery behavior is unchanged. Full frozen
+suite and S19 acceptance still require their own runs.
+
+## Plan 145 P0 workflow tests and remote Personal Feed reply parent — locally fixed (2026-11-18)
+
+- Three previously missing P0 behavioral sequences now cover the real
+  `/subscribe-community` callback with Accept and unrelated target isolation,
+  Personal Feed worker-owned discussion creation/receipt/echo, and SIGKILL of
+  an in-flight Create after a controlled physical effect but before durable ACK.
+- The worker-driven Personal Feed sequence exposed an existing parent bug:
+  human replies to a bot-rendered remote comment used the AP root instead of
+  the remote comment. Scoped lookup through a proven physical `InboundDiscordDelivery` receipt
+  now resolves the exact remote parent; wrong root/thread IDs cannot match.
+- Focused local checks: 66 PASS, 2 deselected with a temporary Discord SDK import stand-in;
+  actual frozen full suites and operator live OAuth/REST/Gateway remain unrun on
+  this SHA. P1/P2 cross-boundary scenarios and S19 are still open.
+
+## Discord D1 fixture ActivityPub URLs F1 — fixed locally (2026-11-18)
+
+- The independent full-suite replay on `d22f884` passed 2270 Python tests but
+  failed the retired local ActivityPub URL scanner on four newly introduced
+  root-level Create activity IDs in D1 callback fixtures.
+- The four IDs now use `build_user_create_post_activity_id()` with their actual
+  `alice`/`bob` owners. The legacy Personal Feed test retains its deliberately
+  missing physical source container; scanner exclusions were not changed.
+- Local retired-URL and identity URL suites: 50 passed. Full D1 SDK callback
+  tests, the full frozen Python suite and S19 were not re-run here because the
+  available environment lacks `discord.py`, `hypothesis` and frozen package
+  downloads. The report's P0–P2 production-runtime behavioral suite remains
+  a separate outstanding test-coverage task, not part of this fixture fix.
+
+## Discord published-source replay D1 — fixed locally (2026-11-18)
+
+- The real Discord `on_thread_create` replay and subsequent human `on_message`
+  previously queried `PublishedActivityObject` by an unscoped Discord message
+  ID. Typed canonical sources correctly reject that ambiguous lookup.
+- Both Gateway paths and Personal Feed discussion adoption now select only a
+  Personal Feed root matching the exact Discord connector, parent text channel
+  and root message. Community starters in other physical containers cannot
+  claim Personal Feed ownership, even when message IDs coincide.
+- `DISCORD_PERSONAL_FEED_LEGACY_SOURCE_TEMP` allows previously persisted Personal
+  Feed roots without a typed source container to resolve by their **matching**
+  Discord channel/message projections. It may be removed after an explicit
+  migration backfills every affected root with its verified source container.
+- Four SQLite + production BridgeBot callback regressions and 28 targeted
+  local tests passed with a minimal Discord SDK import shim. The complete
+  Discord SDK/restart/OAuth replay and full dependency-backed suite require
+  external verification; the 2026-11-18 full report's P1/P2 test suggestions
+  are not claimed as implemented by this fix.
+
+## Fluxer-only simplicity review (2026-11-17)
+
+- Forum Create uses one fresh Python capability/tag snapshot per preflight;
+  Node continues its independent SDK-side authorization and metadata checks.
+- SQLite Fluxer admission uses existing connector-FK and Discord-projection
+  scans instead of duplicate surface/guild queries. Both canonical AP tables
+  remain guarded against Discord guild provenance. Local targeted suite: 61 PASS.
+- S19 live Fluxer and Compose acceptance remains open.
+
+## Fluxer-only transport follow-up (2026-11-17)
+
+- Forum Create and text/announcement channel sends now carry the live channel
+  guild ID from Python preflight into physical Node write DTOs and verify forum
+  receipts against it. Missing caller hints are accepted, conflicting hints
+  are rejected before SDK effects; cross-process forum regression covers both.
+- Python and Node reject shortened, hex, octal and integer-form IPv4 origins.
+  Only canonical dotted-decimal IPv4 is accepted, avoiding WHATWG normalization
+  changing the SQLite-persisted identity. DNS and explicit IDN A-labels remain.
+- S19 remains open for live Fluxer REST/Gateway, Compose and full tests with
+  lockfile dependencies. Local SDK-boundary fakes do not prove live acceptance.
+
+## Fluxer-only edge re-review (2026-11-17)
+
+- Thread reply sends now carry the fresh verified guild identity to the Node RPC,
+  including when the caller's `ThreadRef` has no guild hint. An explicitly
+  conflicting guild is refused; cross-process nested replies are verified.
+- Python/Node Fluxer instance origins now require ASCII hostnames; valid IDNs
+  must be supplied as their A-labels. Unicode input is refused before SDK/DB.
+- Private RPC bearers require at least eight visible, non-space ASCII bytes
+  at Python settings/RPC and Node startup/RPC boundaries. No raw token is logged.
+- S19 remains open: real Fluxer REST/Gateway and Docker deployments still need
+  operator-provided acceptance and full dependency-backed suites.
+
+## Full re-verification D1–D4 (2026-11-17)
+
+- D1 fixed locally: `ThreadRef` send authorization is tied to the physical
+  thread (bit 38, history and visibility) rather than parent forum SendMessages.
+  Cross-process SDK-boundary regression covers successful nested replies,
+  independent parent-permission revoke and thread-permission revoke.
+- D2 fixed locally: `discord-primary` cannot be a Fluxer connector key in
+  Python settings, SQLite preflight or Node startup. No migration on refusal.
+- D3 fixed locally: trailing-DNS-dot origins are rejected on both transports;
+  canonical case/default-port spellings continue to work.
+- D4 fixed locally: Python rejects IPC bearer lengths below Node's eight-character
+  minimum before opening DB/actor keys.
+- S19 remains open: real Fluxer REST/Gateway and Docker isolation acceptance,
+  and complete dependency-backed Python/Node/typecheck runs are external gates.
+
+## Fluxer-only implementation review (#12, 2026-11-17)
+
+- F1 locally fixed and extended after re-review: pre-migration check now also refuses legacy source_*_id Discord projections in canonical thread/message groups, even with NULL connector/surface; real Fluxer build_runtime refuses before migration and preserves original SQLite bytes.
+- F2 locally fixed and extended after re-review: thread_replies also requires read_history=allowed, matching the send executor; write-contract gate remains disabled by default pending real-server evidence.
+- F3 legacy fixtures now explicitly select Discord in all nine re-review-named modules, including the HTTP-only media runtime and direct User Actor Follow fixture. Local selected tests pass; the original 71 IDs/full suite could not be re-run without hypothesis/discord.py.
+- F4 RR06: the earlier extra `empty_dotenv()` read blocked single-delivery FIFO configuration. Fixed with a single-pass dotenv source, preserving empty BRIDGE_PLATFORM and ignoring empty other values per file. FIFO and source-priority regressions pass; F5 canonical Compose health comparison remains unchanged.
+- S19 OPEN: real Fluxer REST/Gateway, Docker and full dependency-backed suites remain external acceptance gates.
+
 # Platform API (physical surface mapping contract)
 
 This document owns the SDK-independent transport boundary between Bridge Core and physical platforms. physical surface mapping **defines** the contract and stateful test fakes; it does **not** activate a Discord adapter, a Fluxer connector, a second Gateway receiver, a new database migration or a new delivery queue. The deployed path still uses `BridgeBot`, `DiscordEventRouter` and existing fanout/Personal Feed workers directly; the exact temporary boundaries are marked `MULTIPLATFORM_LEGACY_DISCORD_PORT_TEMP` in `src/runtime_ports.py`, `src/discord_bot.py` and `src/app.py`.
@@ -485,3 +611,203 @@ Fedify-native security integration remains blocked by missing dependencies.
 
 - Replaced numbered roadmap labels with feature names in code comments,
   diagnostics, documentation and test paths; updated imports and references.
+
+## Fluxer SDK v3.3.0 integration — verification pending
+
+The upstream v3.3.0 source confirms public `ThreadCreate/Update/Delete` and `ShardDisconnect/Ready/Resumed` events. Local Node event normalization, authenticated forwarding and injectable service composition are covered by deterministic tests, but `@fluxerjs/core@3.3.0` could not be installed in the current environment (`registry.npmjs.org`: `EAI_AGAIN`). The published npm package, full SDK TypeScript typings and real-instance Gateway behavior remain unverified. **Do not enable production writes based on SDK fakes or assume per-socket DNS pinning:** the accepted one-operator-trusted-instance scope uses official SDK REST and explicitly approved discovery/Gateway hosts, not a custom REST dispatcher. See `fluxer-connector/README.md`.
+
+- **OPEN (Fluxer SDK security boundary):** upstream `@fluxerjs/rest` v3.3.0
+  calls its own `undici.fetch` with a package-global Agent and exposes no
+  per-client dispatcher option; the public SDK WebSocket constructor hook
+  does not secure REST. This is an **accepted residual risk** for the
+  operator-trusted-host model, not an incomplete promised custom dispatcher.
+  The production SDK factory validates approved discovery endpoints but does
+  not claim to pin every later SDK REST socket. Bot REST writes are disabled.
+- **IMPLEMENTED locally (Fluxer SDK reads):** `rest_reads.ts` handles fresh,
+  scoped channel/thread/message lookups via the documented ChannelManager
+  methods, through the authenticated Python/Node RPC edge. An SDK-edge fake
+  and real loopback HTTP tests check physical parent/container identity.
+  Published SDK types and real Fluxer responses are still unverified.
+- **IMPLEMENTED locally (Fluxer ACL):** SDK-backed `check_permissions` uses
+  freshly fetched channel/guild/bot member/role IDs and the SDK's own
+  `permissionsIn()` bitfield, including thread parent scope. Only ViewChannel,
+  ReadMessageHistory and SendMessages can yield `allowed` from those flags;
+  forum create and per-message edit/delete remain `unknown` until proven.
+  This does not establish real-instance permission semantics or production
+  SDK factory safety.
+
+- **CP023 local fix (not live-verified):** public SDK `MessageCreate` now uses CP021's force-read of the exact thread and its parent before emitting a claimable `parent_channel`/`thread_context`. Mismatched, missing or non-forum parents are forwarded only as unverified observations; these do not create AP publications. The accepted SDK-read task is joined on shutdown. Real SDK server behavior and published types remain an acceptance gate.
+- **Trusted-instance security scope update:** revised issue #12 plan accepts the official SDK's default Undici REST transport only for one expressly operator-trusted host set; no adversarial per-socket SSRF/DNS-rebinding guarantee is claimed. The production SDK factory is now implemented with approved discovery/Gateway-host checks, but remains unverified against the published SDK and actual server. Never accept arbitrary origins.
+
+- **CP024 local fix (live SDK acceptance pending):** Fluxer SDK `fetch_message` now preserves explicit `webhook_id` provenance. The Python adapter checks current authenticated connector-bound Node READY/bot ID before granting `is_bridge_owned`, and rejects foreign bot/webhook/unknown identity in Edit/Delete. A two-process SDK-session/RPC/SQLite mutation scenario verifies exact bot copy revision/remote edit/delete; real Fluxer REST write methods are still pending their own checkpoint.
+
+- **CP025 locally implemented; deployment acceptance pending:** Python Fluxer settings no longer accept or carry `bot_token`; at most one trusted connector and one matching persisted SQLite row are admitted, with no automatic rebind. Private RPC is restricted to the shared namespace loopback address. The Node-only secret-file reader is implemented and independently tested, but the actual Node process entrypoint, read-only Compose secret mount, and B20/B21 two-container isolation acceptance remain open.
+
+- **CP026 local implementation (live SDK acceptance blocked):** the Node
+  standalone service now has a production SDK constructor, tokenless approved
+  discovery, exact Gateway socket host admission, Node-only secret-file use,
+  and a read-only SDK RPC dispatcher. SDK `ClientOptions.instance` receives
+  the full discovered endpoint map to prevent v3.3.0 hosted endpoint defaults.
+  Authenticated RPC health now reports exact instance origin; Python refuses
+  bot ownership if the origin differs, even when the bot ID matches. Local
+  SDK-edge / RPC / Python tests pass. The actual npm SDK is absent, TypeScript
+  against its published declarations is blocked, and no live Fluxer or Compose
+  verification has taken place. Bot REST writes/capabilities remain blocked
+  until native build-specific contracts are confirmed. No per-socket
+  DNS-rebinding/SSRF protection is claimed under the trusted-host plan.
+
+- **CP027 SDK forum metadata (local verification only):** a fresh SDK
+  `get(Routes.channel(id))` must confirm forum/guild/type, `flags` and all
+  `available_tags` before tag policy can be described as observed. The SDK's
+  cached `availableTags`/default `flags=0` cannot prove current server policy.
+  Operator tag selection is parsed immutably and checked before bot Create in
+  adapter tests; moderated tags remain unsupported without separately proven
+  moderator rights. The supplied server source's `REQUIRE_TAG` bit (1 << 4)
+  has not been checked against an actual approved server commit and login.
+  Production advertises **no** physical write capability and no forum POST
+  is activated. The actual SDK/type-backed compilation, versioned server
+  capability verification and Python runtime config injection remain open.
+
+- **CP028 SDK forum POST contract — locally implemented, not production-enabled:**
+  SDK v3.3.0 `ThreadManager.createPost()` discards the response starter;
+  `forum_create.ts` preserves it via the same `client.rest.post` route/body
+  verified in the SDK source and supplied unversioned server source. Real Node
+  RPC + two-process Python/SDK-edge tests verify one POST, scoped receipts,
+  fail-closed tags and `unknown_delivery`; production `main.ts` retains
+  `unsupported`/`forum_posts=False` until the exact trusted server build's
+  bot forum/ACL/starter and Gateway evidence is captured. No live bot write,
+  published SDK type-check or full Python dependency-backed suite passed.
+
+- **CP029 SDK message/reply executor — isolated local verification only:**
+  `message_send.ts` uses official SDK `channels.send` with exact `replyTo`,
+  verified container/parent and notification suppression; foreign parents,
+  absent/unknown thread write rights and unsupported media reject pre-I/O.
+  Node HTTP and two-process Python→Node SDK-edge tests show one physical
+  reply and `unknown_delivery` without re-POST on lost ACK. The server source
+  used to identify thread permission bit 38 is unversioned; real SDK and
+  server bot reply/ACL contract remain BLOCKED, so production `main.ts`
+  continues to refuse `send_message` and false capabilities remain intact.
+
+
+- **CP030 SDK bot edit/delete — local SDK-edge behavior verified, live gate open:**
+  `message_mutations.ts` uses official v3.3.0 Message.edit/delete with a fresh
+  bot-owned non-webhook message read, exact container check and current ACL.
+  Authenticated Node RPC and the Python SQLite CAS/revision scenario exercise
+  the same implementation with a stateful fake remote. Wrong author/webhook,
+  invalid content and uncertain edits cannot advance a physical revision.
+  Production main.ts remains write-disabled pending actual SDK installation,
+  pinned real Fluxer build and documented acceptance tests. No remote
+  reconciliation from body/title equality is implemented; Python's exact
+  in-process committed-attempt proof remains read-only.
+
+
+- Fluxer runtime composition: Python opt-in registration, authenticated HTTP
+  callback and connector-isolated readiness checks are implemented. Full
+  Python regression is BLOCKED in this environment: `discord.py` and
+  `hypothesis` are absent and PyPI DNS resolution fails. SDK v3.3.0 could
+  not be installed (npm registry DNS failure); real Fluxer REST/Gateway
+  contracts and production write activation are not yet accepted.
+
+- CP032 local behavioral checks: single-connector capacity inheritance,
+  offline read-only reconciliation, and real SQLite Discord/Fluxer scheduler
+  isolation verified with test-only physical owners. Full Python runtime
+  regression and production Node SDK/Compose contracts remain blocked on
+  missing dependencies, Docker and live Fluxer access.
+
+- **CP033 static Compose wiring (B20/B21 live BLOCKED):** the optional
+  `fluxer-sidecar` now shares `network_mode: service:bridge`, binds one fixed
+  loopback RPC port, uses a Node-only read-only credential mount and independent
+  restart/health contract. Five source-level Compose tests pass. A real
+  two-container network namespace/secret mount/sidecar restart verification
+  was **not** possible because Docker is absent. The required SDK npm
+  `package-lock.json` could not be produced: npm registry DNS `EAI_AGAIN`.
+  Consequently the Dockerfile intentionally cannot build, and the opt-in
+  configuration is **not production-accepted**. The pinned real Fluxer
+  build/starter/Gateway/live acceptance and write dispatcher remain blocked.
+
+- **CP034 available-environment regression (2026-10-29):** 142 selected
+  Python unittest scenarios passed (one skip); 106 Fluxer Node fixture tests
+  passed. `python -m compileall` and `git diff --check` passed. The complete
+  `pytest` run fails at `tests/conftest.py` because `hypothesis` is missing;
+  the exact original HEAD `1645689c...` fails at the same import boundary.
+  The original HEAD Fedify Node check also lacks installed Node modules.
+  Fluxer `npm run check` lacks `@types/node`; no published SDK typecheck or
+  actual Docker compose test was possible. Release workflow review found
+  and corrected a job-level `hashFiles` pre-check that could be evaluated
+  before checkout: the checked-in lock presence is now an explicit output
+  of the `validate-version` job, consumed by optional Node image publication.
+  Full B01–B21/R01–R24 and live acceptance are **BLOCKED**, not PASS; see
+  `docs/development/fluxer_live_verification.md`.
+
+## Runtime cleanup lock safety (CP035)
+
+Startup and shutdown retain both SQLite lifetime and deployment leases on unconfirmed teardown. Strong process-level ownership prevents GC from unlocking them; fatal errors block runtime restart in that process. Spawned-process SQLite scenarios cover restore exclusion and kernel release on process exit.
+
+## Python test infrastructure (CP036)
+
+Default pytest collects application and vendored discordops tests together. Shared fixtures use bridge_test_support; vendor tests use discordops_tests. Spawn imports are covered, PyYAML is declared, and uv.lock uses public registry URLs without changing existing pinned versions.
+
+## Runtime regression scenarios (CP037)
+
+Startup/shutdown fixtures use the real Runtime and SQLite. Ready Discord admission is explicit. Nested Create coverage observes blocked -> pending -> scheduler delivery, committed parent/child surfaces and the persisted physical parent ID. Compose tests parse services instead of counting YAML strings.
+
+## Official SDK type safety (CP038)
+
+The ordinary Fluxer TypeScript check now binds all dormant write factories to the real SDK Client. Send/Edit/Delete use official SDK types and channel predicates; no double assertions are used. All 108 Node tests pass, including genuine SDK Client/DM boundary tests. Live write acceptance remains open.
+
+## Reproducible SDK build (CP039)
+
+Official SDK lock committed. npm ci, tsc and 109 Node tests pass on Node 22.13.1. Release fails instead of skipping the Fluxer image when its lock is missing. CI covers Python, both Node packages and all container builds. Docker execution remains unavailable locally.
+
+## Deployment and process shutdown (CP040)
+
+A real SIGTERM/Uvicorn process test reproduced exit by signal before Runtime.close. Application-owned signals and sibling lifetime supervision now close SQLite before exit; real process scenarios cover SIGTERM and normal HTTP/Gateway return. Compose grants 60s and HTTP drains for 30s. An opt-in actual-container verifier covers isolation, readiness, restart and shutdown; execution is BLOCKED locally because Docker and test-instance credentials are unavailable. B20/B21 and live REST acceptance remain open.
+
+## Corrective-series final verification (CP041)
+
+Final Python suite: 2197 passed, 1 skipped (actual Docker deployment), 98 subtests passed. Standalone inbound report: 53 passed; tooling: 12 passed. Remaining old fixture/vendor paths in reporting tools were corrected. Actual restore now has interprocess refusal/no-replacement and post-exit success coverage (4 focused tests passed). Fluxer SDK: 109/109 tests on Node 22, tsc and npm ci verified. Fedify: 20 security tests and 51/52 script files pass; child tsx launch remains blocked by Unix-socket EPERM. Docker/live Fluxer acceptance remains unperformed, production writes disabled. See docs/development/fluxer_fix_verification_ru.md.
+
+## Measured Fluxer REST message contracts
+
+Independent VM verification on fluxer-release@2026.1106.212644 found four real receipt/reply/mutation failures. Full REST messages omit guild_id and webhook_id; SDK 3.3.0 maps them to null. Local corrections verify guild through the fresh container, reject explicit conflicts, retain exact bot/webhook checks and preserve independently returned starter/thread IDs even when equal. fetch_message had the same guild incompatibility and is corrected too. Real-SDK contract regressions and two-process Python/Node/SQLite tests cover the measured shape; a live rerun of the fixes and complete Compose/physical SQLite acceptance remain open. Production writes stay disabled. The supplied Fedify audit's 6 advisories (1 high) remain a separate dependency follow-up. See docs/development/fluxer_rest_contract_fixes_ru.md.
+
+
+## Fluxer fixture URL maintenance
+
+A complete-history CP041 checkout exposes one existing retired-AP-URL scanner failure in two Fluxer behavioral fixtures. The separate follow-up changes only their activity/inbox/outbox/followers URLs to actor-scoped paths; scanner and behavioral expectations remain unchanged. Final Python suite after both fixes: 2202 passed, 1 skipped (actual Compose), 98 subtests. Fluxer Node 22: 117/117 plus tsc/lock checks. Fedify tsc and 20 security tests pass; normal tsx CLI remains blocked by Unix-socket EPERM (alternative entry point: 51/52 files, same child-CLI blocker). Live rerun of corrected REST writes remains required.
+
+## Plan 145 CP08 — live Fluxer capability verification pending
+
+Current checkout has verified Node ACL behavior for forum vs thread bit 38 and bot-owned mutation view/history eligibility (9 focused tests). Production Fluxer write capabilities remain false. This environment has no installed `@fluxerjs/core`, no Docker CLI and no operator Fluxer instance/credentials; SDK typecheck, physical REST readback, real permission revocation and Compose validation remain NOT RUN. CP08 is not complete and CP09 must not enable writes before the plan's real-instance contract proof.
+
+- **Plan 145 CP09 — production dispatcher wired, live acceptance outstanding:** `main.ts` now composes existing SDK bot-only forum Create, thread/message Send and bot-owned Edit/Delete handlers through one authenticated SDK client; `create_reply_thread`, webhooks and attachments remain unsupported. Capabilities require fresh verified forum tag metadata or an open/thread-parent-scoped physical target; every SDK executor independently checks ACL and author/scope. Authenticated Node production-dispatch tests and Python→Node forum cross-process scenarios passed using external SDK fakes. No real server/Docker write readback was run; this build is a release candidate, **not** accepted production transport. `@fluxerjs/core` / `@types/node` incomplete installation blocks full typecheck and two SDK-importing test files.
+
+- **Plan 145 CP10 — Gateway observation gate regression:** all six normalized event kinds now pass a real authenticated ASGI ingress scenario twice, including bot echo and non-new thread; SQLite canonical posts, comments, physical copies and published AP objects remain unchanged. Existing Node SDK-event enrichment/forwarding and shutdown tests passed. Actual live Gateway delivery remains unverified until acceptance.
+
+- **Plan 145 CP11 — durable mutation recovery and regression evidence:** real SQLite tests prove a lost effectful mutation ACK leaves coordinator-owned state `unresolved`; a fresh coordinator does not submit a second SDK write. A mutation-less scheduler continues Create recovery without touching an eligible historical mutation copy. 17 targeted and 48 additional forum/recovery/Fluxer regressions passed. Full pytest collection remains blocked by absent `hypothesis` (same environment baseline); Discord SDK-based tests require `discord.py` and live server remains untested.
+
+- **Plan 145 CP12 — exclusive Compose profile gate:** bridge service and Node sidecar share the explicit `BRIDGE_PLATFORM` selected by Compose interpolation; the opt-in Node service immediately fails startup if Discord mode was selected, rather than running a second platform. Health checks exact origin, connector, SDK bot identity and no Gateway gap. Deployment docs now describe isolated Discord/Fluxer projects with separate origin/SQLite volume/published ports/secret file. Static YAML regressions passed; actual Compose engine/config has not run in this environment (Docker CLI absent).
+
+- **Plan 145 CP13 — locally verified, live release acceptance pending:** production candidate includes exclusive runtime, read-only SQLite/AP identity admission, Node RPC gap/current-bot guard, physical Fluxer create/send/own edit/delete dispatcher, observation-only Gateway and exclusive Compose profile. Replaced two obsolete cross-process assertions that still expected all forum writes disabled; the updated module passes 4/4. Full Fluxer Node run: 115 pass, 2 SDK-import files cannot load; Fedify security subset: 6 pass, 1 missing-package import; TypeScript checks and pytest collection blocked by missing offline dependencies; real Docker/Fluxer not run. S19 is NOT PASS and issue #12 cannot be closed. See `docs/development/fluxer_145_final_verification.md`.
+
+## RR07 — Pydantic Settings source-hook compatibility (resolved locally, 2026-11-17)
+
+The RR06 one-pass dotenv loader uses private `_settings_init_sources()` from
+`pydantic-settings 2.14.1`, absent in the old declared floor 2.8.0. The
+Python dependency is now pinned exactly to 2.14.1 in `pyproject.toml`, with
+`uv.lock` metadata aligned; Docker's `pip install .` uses that requirement.
+Any dependency upgrade must repeat FIFO, precedence and multi-file-empty
+tests. Actual Docker build and S19 Fluxer acceptance remain external checks.
+
+
+## Plan 145 F2 — cross-process ACL fixture publication (fixed locally, 2026-11-18)
+
+The forum-create SDK test fixture polls ACL/tag/Gateway JSON every 5 ms. Python's
+previous `Path.write_text()` updates could expose a truncated intermediate JSON
+and crash the Node fixture without an attempted write. All live ACL updates now
+publish a complete sibling temporary file with atomic `os.replace()`. A
+cross-process regression pauses before replacement: Node continues serving the
+old valid snapshot, then observes updated tag/Gateway state. Replacement
+failure preserves the previous ACL. The affected Python suites pass locally;
+full dependency-backed Python/Node suites and VM live acceptance were not run
+on this fix. P0–P2 workflow completeness and S19 remain separate work.

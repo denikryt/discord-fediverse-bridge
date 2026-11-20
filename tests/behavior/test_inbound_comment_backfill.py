@@ -8,11 +8,11 @@ System state -> action -> observable result pattern per AGENTS.md.
 """
 
 from __future__ import annotations
-from support.runtime import build_runtime_namespace
-from support.runtime import build_test_policy_service
+from bridge_test_support.runtime import build_runtime_namespace
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
-from support.community_events import physical_forum
+from bridge_test_support.community_events import physical_forum
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 

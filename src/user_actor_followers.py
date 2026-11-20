@@ -19,7 +19,7 @@ class UserActorFollowService:
     """Own User Actor follower persistence, Accept delivery, and owner notification."""
 
     def __init__(
-        self, *, database: object, fedify_gateway: object, discord_notices: DiscordOwnerNoticePort
+        self, *, database: object, fedify_gateway: object, discord_notices: DiscordOwnerNoticePort | None
     ) -> None:
         """Bind persistence and outer delivery boundaries used by the lifecycle."""
         self.database = database

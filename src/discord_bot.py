@@ -18,6 +18,7 @@ from .fedify_gateway_client import FedifyGatewayClient
 from .discord_directory import refresh_discord_directory_from_bot
 from .command_tree import BridgeCommandTree
 from .user_bans import UserBanService
+from .platform_types import MessageRef
 
 if TYPE_CHECKING:
     from .user_profiles import UserProfileService
@@ -240,8 +241,11 @@ class BridgeBot(discord.Client):
         parent_id = getattr(thread, 'parent_id', None)
         if parent_id is None or (self.user and thread.owner_id == self.user.id):
             return
-        personal_root = self.database.activitypub_objects.get_published_activity_object_by_discord_message_id(
-            thread.id
+        # A Personal Feed root is authored in the parent text channel. Forum
+        # starter IDs may be identical but their *container* is the thread;
+        # searching by numeric message ID would reject scoped source records.
+        personal_root = self.database.activitypub_objects.get_personal_feed_root_by_discord_source(
+            MessageRef('discord-primary', str(parent_id), str(thread.id))
         )
         personal = bool(
             personal_root is not None
@@ -303,8 +307,12 @@ class BridgeBot(discord.Client):
         personal_thread = self.event_router.is_personal_feed_thread(message.channel.id)
         possible_root = None
         if not personal_thread:
-            possible_root = self.database.activitypub_objects.get_published_activity_object_by_discord_message_id(
-                message.channel.id
+            # A not-yet-adopted Personal Feed root lives in the parent text
+            # channel, not in the discussion thread. Keep this source lookup
+            # scoped so an existing community starter cannot be mistaken for it.
+            possible_root = self.database.activitypub_objects.get_personal_feed_root_by_discord_source(
+                MessageRef('discord-primary', str(message.channel.parent_id),
+                           str(message.channel.id))
             )
         personal_unadopted = bool(
             possible_root is not None

@@ -31,7 +31,7 @@ from tools.migration_completeness_report import build_report
         ),
         ("tests/test_database.py::test_schema", "python", "D", "core_or_support"),
         (
-            "vendor/discordops/tests/test_operation.py::test_run",
+            "vendor/discordops/discordops_tests/test_operation.py::test_run",
             "python",
             "D",
             "discordops_framework",

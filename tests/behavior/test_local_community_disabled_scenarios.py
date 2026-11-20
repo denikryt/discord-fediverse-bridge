@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from support.community_events import create_thread, configure_renderer
-from support.runtime import build_test_policy_service
+from bridge_test_support.community_events import create_thread, configure_renderer
+from bridge_test_support.runtime import build_test_policy_service
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,8 +23,8 @@ from src.operations import (
     SubscribeLocalCommunityInput,
     subscribe_local_community_operation,
 )
-from support.db import add_registered_user, build_database
-from support.discord import build_starter_message, build_thread
+from bridge_test_support.db import add_registered_user, build_database
+from bridge_test_support.discord import build_starter_message, build_thread
 
 
 def _runtime(

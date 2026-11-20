@@ -24,7 +24,7 @@ Remote ActivityPub server
   -> Discord or relay fanout
 ```
 
-physical surface mapping defines an **inactive** connector-scoped [Platform API](platform-api.md) (SDK-independent references, event shapes, lookup/delivery/permission ports, and a non-owning adapter registry). initial persistence implementation physical identities live in SQLite; Discord Gateway ingress and fanout **still execute the existing Discord-specific paths** until the Discord adapter and durable fan-out integration cutover. A configured Fluxer connector row does not start an adapter or Gateway client.
+physical surface mapping defines an **inactive** connector-scoped [Platform API](platform-api.md) (SDK-independent references, event shapes, lookup/delivery/permission ports, and a non-owning adapter registry). initial persistence implementation physical identities live in SQLite; Discord Gateway ingress and fanout **still execute the existing Discord-specific paths** until the Discord adapter and durable fan-out integration cutover. An opt-in Fluxer connector row registers a token-free Python adapter with an independently deployed Node SDK sidecar; it never starts a second Python Gateway client. The current canonical Fluxer publication gate remains closed until issue #13.
 
 The Python bridge is the orchestration and persistence process. It starts the Discord bot, exposes registration and private gateway intake routes, owns SQLite state through SQLAlchemy, routes Discord events, and decides which runtime handles a bridge action.
 
@@ -53,7 +53,7 @@ The Fedify gateway is the ActivityPub/WebFinger edge. It owns public actor/objec
 
 ## Runtime composition and cleanup
 
-`src/app.py` loads the migrated `discord-primary` connector from SQLite and refuses absent/incompatible metadata before the Gateway starts. Its registry binds exactly one live `DiscordAdapter` for that persisted identity. `Runtime.close()` attempts callback drain, both worker stops, SDK I/O quiesce, OAuth/Fedify close, DB close and deployment lease release in order even if an earlier cleanup step raises. A single failure is re-raised unchanged, while multiple failures are retained in ordered `ExceptionGroup`/`BaseExceptionGroup` rather than having a late release error replace the primary error. Each worker's `stop()` is responsible for joining its own task before shared resources close; runtime-level and SDK TaskGroup cancellation still require integration validation.
+`src/app.py` loads the migrated `discord-primary` connector from SQLite and refuses absent/incompatible metadata before the Gateway starts. Its registry binds exactly one live `DiscordAdapter` for that persisted identity. `Runtime.close()` attempts callback drain, worker stops, SDK I/O quiesce, OAuth/Fedify close and DB close in order even if an earlier cleanup step raises. It releases the shared deployment lease and then the lifetime lease only after every resource has confirmed teardown. An unconfirmed close retains strong process-level references to all owners and both leases, logs all failures, and raises `UnsafeRuntimeShutdown` (exit status 1). New runtime composition is refused in that process. Startup retries teardown once; it preserves the initial startup error and every cleanup failure. An explicit successful cleanup retry may clear quarantine; otherwise the process must exit so the kernel releases the locks. Each worker's `stop()` is responsible for joining its own task before shared resources close; runtime-level and SDK TaskGroup cancellation still require integration validation.
 
 `src/app.py` is the only production composition root. It opens live owners in startup order, completes the remaining Discord/runtime cycles through named one-time bind methods, validates the graph before returning `Runtime`, and closes already-opened resources in reverse order if any later constructor, bind, or validation step fails. `Runtime.close()` remains the successful-startup shutdown owner. Raw Discord edit/delete paths receive `DiscordMutationContext` from `src/runtime_ports.py` rather than a broad `Runtime` or `BridgeBot` reference.
 
@@ -77,7 +77,7 @@ This document does not define exact payload fields, every route, or every table 
 
 ## Profile persistence and media ownership
 
-Python owns profile persistence and bridge-managed profile image bytes. The main runtime holds a shared deployment-generation lease while DB and media paths are open; backup shares that generation, while restore and startup recovery require exclusive ownership. The Fedify gateway does not receive filesystem access. initial persistence implementation does not change actor serialization.
+Python owns profile persistence and bridge-managed profile image bytes. The bridge holds an exclusive process-lifetime `FileLock` at `<canonical-sqlite-file>.runtime.lock` from before recovery until all clients/tasks and SQLite are closed. It also retains the independent shared deployment-generation lease while DB and media paths are open; backup shares that deployment generation, while restore and startup recovery require exclusive deployment ownership. The lifetime lease closes the exclusive→shared deployment transition race between concurrently starting bridge processes. The Fedify gateway does not receive filesystem access. initial persistence implementation does not change actor serialization.
 
 ## User Actor profile delivery recovery
 
@@ -104,6 +104,25 @@ The gateway renders User Actor outboxes from a fixed-size internal DTO. Python o
 
 ## Platform persistence boundary
 
-Connector-scoped persistence separates domain actors from physical connector/channel locations. `src/db/repositories/platform_surfaces.py` owns placement resolution and typed claim mutations. Discord routing uses current `discord-primary` claims; connector-scoped historical copies survive release and rebinding. Fluxer rows are persistence-only at present. SQLite 3.31+ is required for stored generated roles; PostgreSQL 12+ DDL compatibility does not imply a PostgreSQL runtime migration implementation.
+Connector-scoped persistence separates domain actors from physical connector/channel locations. `src/db/repositories/platform_surfaces.py` owns placement resolution and typed claim mutations. Discord routing uses current `discord-primary` claims; connector-scoped historical copies survive release and rebinding. Fluxer connector rows now support opt-in Python adapter/runtime registration, authenticated read-only Node RPC and fail-closed Gateway observation. Production Fluxer physical writes and community federation remain disabled pending real-instance acceptance. SQLite 3.31+ is required for stored generated roles; PostgreSQL 12+ DDL compatibility does not imply a PostgreSQL runtime migration implementation.
 
 Database startup supports released v0.1.0 SQLite sources at version 0 and the complete current model at version 1. It upgrades directly in one transaction; The direct transfer work items the released rows in SQL TEMP, creates the current ORM target once and copies them natively; no legacy schema inventory business schema is reconstructed. See [SQLite startup migrations](../development/database-migrations.md).
+
+
+## Optional Fluxer runtime composition
+
+`src/app.py` admits at most one saved trusted Fluxer connector before external
+clients are composed. With the opt-in config it registers `FluxerAdapter` and
+one `FluxerInboundHandler`, includes the authenticated `/internal/fluxer/events`
+route, and gives the existing scheduler a second, connector-specific delivery
+lane. The Node sidecar is independent: Python receives only a private RPC
+bearer, never its bot token. The Fluxer lane checks Node SDK READY and the
+attested bot identity before allowing durable dispatch claims; failed health
+checks leave pristine pending intents recoverable and do not stop Discord.
+`Runtime.close()` rejects and joins HTTP ingress before disposing SQLite, then
+joins physical lanes and RPC operations before releasing the runtime lifetime
+lease. Live forum writes remain gated by verified Node SDK contracts.
+
+## Process shutdown supervision
+
+The application owns SIGTERM/SIGINT through HTTP, Discord and final runtime teardown. Uvicorn does not restore/re-raise a signal before SQLite closes. A graceful HTTP return or normal Gateway return terminates the sibling lifetime; cancellation of HTTP explicitly joins its accepted requests before Runtime.close(). HTTP receives a 30-second graceful drain budget, and Compose grants Python 60 seconds before forced termination. A cleanup failure remains fatal and retains both SQLite protections until confirmed recovery or process exit. If an externally owned HTTP server cannot join its callbacks, Runtime strongly retains that owner and its failure; successful SQLite disposal alone cannot release either lease.

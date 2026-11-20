@@ -22,8 +22,8 @@ from src.platform_types import (
     CreatedThread, MessageCreated, MessageRef, MessageView, ThreadCreated, ThreadRef,
     PlatformOperationError,
 )
-from support.fake_platform_adapter import FakeDiscordPort
-from support.db import COMMUNITY_ACTOR_URL, add_accepted_subscription, add_registered_user, build_database
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.db import COMMUNITY_ACTOR_URL, add_accepted_subscription, add_registered_user, build_database
 
 
 class RecordingGateway:

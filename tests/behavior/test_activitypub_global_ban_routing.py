@@ -46,7 +46,7 @@ def _runtime(tmp_path) -> SimpleNamespace:
     )
     return SimpleNamespace(
         database=database,
-        settings=SimpleNamespace(normalized_public_base_url="https://bridge.example"),
+        settings=SimpleNamespace(bridge_platform="discord", normalized_public_base_url="https://bridge.example"),
         bridge_policy_service=SimpleNamespace(
             federation_decision=lambda _subject: SimpleNamespace(
                 allowed=True, reason=SimpleNamespace(value="allowed")
@@ -126,7 +126,7 @@ async def test_community_scoped_ban_does_not_block_user_actor_follow(tmp_path) -
     )
     runtime = SimpleNamespace(
         database=database,
-        settings=SimpleNamespace(normalized_public_base_url="https://bridge.example"),
+        settings=SimpleNamespace(bridge_platform="discord", normalized_public_base_url="https://bridge.example"),
         bridge_policy_service=SimpleNamespace(
             federation_decision=lambda _subject: SimpleNamespace(
                 allowed=True, reason=SimpleNamespace(value="allowed")

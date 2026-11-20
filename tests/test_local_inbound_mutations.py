@@ -16,12 +16,12 @@ import discord  # Load the installed SDK; never leave a global placeholder for o
 from src.local_communities.runtime import LocalCommunityRuntime
 from src.local_communities.service import LocalCommunityService
 from src.platform_types import AuthorRef, ContentDocument, MessageRef, MessageView, PlatformOperationError
-from support.fake_platform_adapter import FakeDiscordPort
+from bridge_test_support.fake_platform_adapter import FakeDiscordPort
 from datetime import datetime, timezone
 from src.content_sync.platform_mutations import PlatformPhysicalMutationCoordinator
 from src.platform_adapters import PlatformAdapterRegistry
 from src.local_communities.inbound_create import LocalCommunityInboundCreateHandler
-from support.db import build_database
+from bridge_test_support.db import build_database
 
 
 class PhysicalEdits(FakeDiscordPort):

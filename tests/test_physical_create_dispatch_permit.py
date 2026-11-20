@@ -314,8 +314,12 @@ class SQLiteCoordinatorPermitScenarios(unittest.TestCase):
                 self.canonical_ids.append(row.id)
         self.adapter = DiscordAdapter(
             connector=ConnectorRef('discord-primary', 'discord'),
-            bot=object(), max_create_attempts=2,
+            bot=__import__('types').SimpleNamespace(bridge_ready=asyncio.Event()),
+            max_create_attempts=2,
         )
+        # Durable coordinator admission requires the same READY observation
+        # that production receives after Discord Gateway authentication.
+        self.adapter._bot.bridge_ready.set()
         self.calls: list[str] = []
         self.unknown = True
 

@@ -29,6 +29,8 @@ jobs:
             exit 1
           fi
           echo "value=$tag_version" >> "$GITHUB_OUTPUT"
+          # Release requires every declared image; a missing SDK lock is fatal.
+          node fluxer-connector/scripts/check-lock.mjs
 
   publish-images:
     needs: validate-version
@@ -73,8 +75,58 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+  # Fluxer remains an opt-in deployment profile, but its declared release image
+  # must build successfully whenever a release is published.
+  publish-fluxer-image:
+    needs: validate-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify pinned SDK on the production Node major
+        working-directory: fluxer-connector
+        run: |
+          npm run check:lock
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm test
+      - name: Require matching Fluxer release package version
+        shell: bash
+        run: |
+          test "$(node -p "require('./fluxer-connector/package.json').version")" = "${{ needs.validate-version.outputs.version }}"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "name=ghcr.io/${owner}/discord-fediverse-bridge-fluxer" >> "$GITHUB_OUTPUT"
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=${{ needs.validate-version.outputs.version }}
+            type=raw,value=sha-${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: fluxer-connector/Dockerfile
+          push: true
+          build-args: |
+            APP_VERSION=${{ needs.validate-version.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
   create-release:
-    needs: [validate-version, publish-images]
+    needs: [validate-version, publish-images, publish-fluxer-image]
+    if: ${{ always() && needs.validate-version.result == 'success' && needs.publish-images.result == 'success' && needs.publish-fluxer-image.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -53,7 +53,7 @@ def _bot_world(monkeypatch, *, root=None, mapped=False, community=False):
         user=None, event_router=FakeRouter(),
         database=SimpleNamespace(
             activitypub_objects=SimpleNamespace(
-                get_published_activity_object_by_discord_message_id=lambda _id: root,
+                get_personal_feed_root_by_discord_source=lambda _ref: root,
             ),
             discord_fanout_groups=SimpleNamespace(
                 get_thread_delivery_by_thread=lambda _id: None,
