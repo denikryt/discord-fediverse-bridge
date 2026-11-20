@@ -12,6 +12,7 @@ from contextlib import closing
 import os
 from pathlib import Path
 import sqlite3
+import tempfile
 
 from src.db.backup import schema_entries_fingerprint
 
@@ -108,10 +109,8 @@ def align(source: Path, output: Path) -> bool:
     source, output = source.resolve(), output.resolve()
     if not source.is_file() or source == output or output.exists():
         raise ValueError('source must exist and output must be a different absent file')
-    partial = output.with_name(output.name + '.partial')
-    if partial.exists():
-        raise ValueError(f'stale partial output must be reviewed manually: {partial}')
     previous, current = _reference_schemas()
+    partial: Path | None = None
     changed = False
     try:
         # Path.as_uri escapes question marks and hashes before SQLite URI mode.
@@ -122,10 +121,17 @@ def align(source: Path, output: Path) -> bool:
                 changed = True
             elif fingerprint != schema_entries_fingerprint(_entries(current)):
                 raise ValueError('source is not an exact CP49/current v2 schema')
+            # Create a private, exclusive temporary destination before SQLite
+            # can copy any sensitive rows; a parallel alignment gets its own
+            # file instead of competing for a predictable .partial name.
+            fd, temporary_name = tempfile.mkstemp(
+                prefix=output.name + '.partial-', dir=output.parent,
+            )
+            partial = Path(temporary_name)
+            os.close(fd)
             # SQLite's backup API copies all committed WAL changes consistently.
             with closing(sqlite3.connect(partial)) as destination:
                 original.backup(destination)
-        os.chmod(partial, 0o600)
         with closing(sqlite3.connect(partial)) as destination:
             if changed:
                 # FK checking resumes after the atomic rebuild. The legacy
@@ -153,12 +159,14 @@ def align(source: Path, output: Path) -> bool:
                         f'SELECT COUNT(*) FROM "{table}" WHERE view_source_updated_at IS NOT NULL'
                     ).fetchone()[0] != 0:
                         raise ValueError('historical source timestamps must remain NULL')
-        partial.replace(output)
+        # An atomic hard link refuses to replace an output created by another
+        # operator after our initial exists() check. os.replace would silently
+        # destroy that output. Both paths share a directory/filesystem.
+        os.link(partial, output)
         return changed
-    except Exception:
-        partial.unlink(missing_ok=True)
-        raise
     finally:
+        if partial is not None:
+            partial.unlink(missing_ok=True)
         previous.close()
         current.close()
 

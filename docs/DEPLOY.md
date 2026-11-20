@@ -365,7 +365,9 @@ checks the source's integrity/FKs, rebuilds the two Group tables with the exact
 current DDL, and verifies the entire resulting schema. All historical trusted
 source timestamps remain `NULL`, while Group revisions, Create snapshots,
 Discord IDs, and claims retain their existing values. The source is never
-modified and the output path must not exist. Verify the generated copy and
+modified and the output path must not exist. The command creates its
+temporary SQLite copy with mode `0600` and atomically refuses to overwrite an
+output path that appears during alignment. Verify the generated copy and
 replace a stopped development database only through the separately approved
 deployment/rollback procedure. Older CP35 v2 and `user_version=3` inputs are
 not accepted by this tool.

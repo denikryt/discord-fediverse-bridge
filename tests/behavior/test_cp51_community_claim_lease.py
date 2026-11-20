@@ -179,3 +179,41 @@ async def test_unprovable_legacy_completed_and_unstarted_claimed_are_filtered_be
         assert count == 0
     finally:
         db.close()
+
+
+@pytest.mark.parametrize('kind', ['post', 'comment'])
+@pytest.mark.parametrize('late_status', ['failed', 'unknown'])
+def test_late_preflight_failure_does_not_touch_replacement_claim(
+    tmp_path: Path, kind: str, late_status: str
+) -> None:
+    """An expired unsent token cannot fail its successor or abort sibling fanout."""
+    db, repo, root_id = _world(tmp_path / f'{kind}-stale.sqlite')
+    try:
+        if kind == 'comment':
+            from src.models import CommunityMessageGroup
+            with db.immediate_session() as session:
+                comment = CommunityMessageGroup(
+                    community_actor_id=GROUP, ap_object_id=NOTE + '/comment',
+                    source_owner_actor_id=OWNER, thread_group_id=root_id,
+                    inbound_create_snapshot_json={'ap_id': NOTE + '/comment', 'kind': 'comment'},
+                    display_object_json={'ap_id': NOTE + '/comment', 'kind': 'comment'},
+                )
+                session.add(comment)
+                session.flush()
+                group_id = comment.id
+        else:
+            group_id = root_id
+        first = repo.reserve_remote_target(kind=kind, group_id=group_id, discord_channel_id=10)
+        with db.immediate_session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim))
+            claim.status = 'failed'  # worker expired an attempt before POST
+        replacement = repo.reserve_remote_target(kind=kind, group_id=group_id, discord_channel_id=10)
+        assert replacement.attempt_id != first.attempt_id
+        assert repo.mark_remote_target(kind=kind, group_id=group_id,
+            discord_channel_id=10, attempt_id=first.attempt_id, status=late_status) is False
+        with db.session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim))
+            assert claim.status == 'claimed'
+            assert claim.attempt_id == replacement.attempt_id
+    finally:
+        db.close()

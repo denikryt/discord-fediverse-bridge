@@ -180,3 +180,54 @@ def test_cli_requires_offline_confirmation_before_writing(tmp_path: Path) -> Non
                              text=True, check=False)
     assert admitted.returncode == 0, admitted.stderr
     assert dest.exists() and 'aligned' in admitted.stdout
+
+
+def test_alignment_publish_does_not_replace_racing_destination(tmp_path: Path, monkeypatch) -> None:
+    """An output created after the initial check wins without losing its bytes."""
+    import os
+    from scripts import align_dev_v2_group_view_timestamps as tool
+
+    source, dest = tmp_path / 'old.db', tmp_path / 'output.db'
+    _old_db(source)
+    source_bytes = source.read_bytes()
+    real_link = os.link
+
+    def racing_link(partial, output):
+        """Simulate an operator creating the destination at publish time."""
+        dest.write_bytes(b'other operator output')
+        return real_link(partial, output)
+
+    monkeypatch.setattr(tool.os, 'link', racing_link)
+    with pytest.raises(FileExistsError):
+        tool.align(source, dest)
+    assert dest.read_bytes() == b'other operator output'
+    assert source.read_bytes() == source_bytes
+    assert not list(tmp_path.glob('output.db.partial*'))
+
+
+def test_alignment_temporary_sqlite_is_private_before_first_open(tmp_path: Path, monkeypatch) -> None:
+    """SQLite must never read or populate a world-readable partial copy."""
+    import os
+    import stat
+    from scripts import align_dev_v2_group_view_timestamps as tool
+
+    source, dest = tmp_path / 'old.db', tmp_path / 'new.db'
+    _old_db(source)
+    real_connect = tool.sqlite3.connect
+    checked = []
+
+    def private_connect(path, *args, **kwargs):
+        """Assert mode before the first SQLite open of the temporary copy."""
+        if str(path).startswith(str(dest) + '.partial'):
+            checked.append(True)
+            assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        return real_connect(path, *args, **kwargs)
+
+    monkeypatch.setattr(tool.sqlite3, 'connect', private_connect)
+    old_umask = os.umask(0o022)
+    try:
+        assert tool.align(source, dest) is True
+    finally:
+        os.umask(old_umask)
+    assert checked
+    assert stat.S_IMODE(dest.stat().st_mode) == 0o600

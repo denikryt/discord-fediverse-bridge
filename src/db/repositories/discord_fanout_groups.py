@@ -573,12 +573,22 @@ class DiscordFanoutGroupRepository(BaseRepository):
     def mark_remote_target(
         self, *, kind: str, group_id: int, discord_channel_id: int,
         attempt_id: str, status: str
-    ) -> None:
-        """Save a proven pre-send failure or an ambiguous external result."""
+    ) -> bool:
+        """Record a current attempt's outcome; ignore callbacks from expired leases.
+
+        The worker may expire an unsent preflight while Discord GET is still
+        pending. Its late failure must not abort sibling fanout or modify the
+        replacement attempt, which owns a different CAS token.
+        """
         if status not in ("failed", "unknown"):
             raise ValueError("invalid target failure status")
         with self.immediate_session() as session:
-            claim = self._claimed_target(session, kind, group_id, discord_channel_id, attempt_id)
+            try:
+                claim = self._claimed_target(session, kind, group_id, discord_channel_id, attempt_id)
+            except RemoteCommunityGroupConflict:
+                # No matching live attempt means this callback has no authority
+                # to change the durable target; keep the newest claim intact.
+                return False
             claim.status = status
             # A definitive failed preflight or an ambiguous POST result must
             # not inherit the preparation deadline as a retry/backoff timer.
@@ -587,6 +597,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 # A proven pre-send failure never has a Discord history marker
                 # worth reconciling; the next reservation builds a fresh one.
                 claim.reconciliation_marker_version = None
+            return True
 
     @staticmethod
     def _claimed_target(session, kind: str, group_id: int, channel_id: int, attempt_id: str):
