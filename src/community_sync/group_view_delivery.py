@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from uuid import uuid4
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, or_, select
 
 from ..formatting import (has_feed_comment_identity, render_remote_community_root,
                           render_remote_community_comment)
@@ -274,11 +274,23 @@ class CommunityGroupViewDeliveryWorker:
                     and _as_utc(claim.next_attempt_at) > now):
                 return None
             if claim.status == 'claimed':
-                # An interrupted POST could have been accepted even if Python
-                # died before receiving the response. Never infer no-send.
-                if (_as_utc(claim.attempt_started_at) is None
-                        or _as_utc(claim.attempt_started_at) > now - self.LEASE):
+                started = _as_utc(claim.attempt_started_at)
+                if started is None:
+                    # Only new preflight claims carry an explicit deadline.
+                    # A missing POST clock means Discord was never attempted,
+                    # so release the expired reservation without history probes.
+                    if (_as_utc(claim.next_attempt_at) is None or
+                            _as_utc(claim.next_attempt_at) > now):
+                        return None
+                    claim.status = 'failed'
+                    claim.reconciliation_marker_version = None
+                    claim.next_attempt_at = None
+                    claim.last_error = 'preflight lease expired before Discord POST'
                     return None
+                if started > now - self.LEASE:
+                    return None
+                # A committed POST-boundary clock cannot prove whether Discord
+                # accepted the request. Keep it ambiguous until exact history.
                 claim.status = 'unknown'
             if claim.status == 'unknown':
                 if claim.kind == 'post' and session.scalar(select(CommunityDiscordTargetClaim.id).join(
@@ -406,18 +418,35 @@ class CommunityGroupViewDeliveryWorker:
         """
         claim = CommunityDiscordTargetClaim
         due_time = or_(claim.next_attempt_at.is_(None), claim.next_attempt_at <= now)
-        # A NULL legacy cursor needs inspection, but a fully caught-up
-        # completed claim must not consume scan space or BEGIN IMMEDIATE.
-        remaining = or_(
-            and_(claim.kind == 'post', CommunityThreadGroup.view_revision >
-                 func.coalesce(claim.applied_revision, -1)),
-            and_(claim.kind == 'comment', CommunityMessageGroup.view_revision >
-                 func.coalesce(claim.applied_revision, -1)),
-        )
+        # Completed legacy claims without an applied cursor are not runnable.
+        # Even with a cursor, only an exact retained inbound Discord ID can be
+        # edited; exclude unprovable rows before opening any writer lock.
+        proven_post = exists(select(CommunityThreadGroupDelivery.id).where(
+            CommunityThreadGroupDelivery.thread_group_id == claim.thread_group_id,
+            CommunityThreadGroupDelivery.discord_channel_id == claim.discord_channel_id,
+            CommunityThreadGroupDelivery.role == 'inbound',
+        ))
+        proven_comment = exists(select(CommunityMessageGroupDelivery.id).where(
+            CommunityMessageGroupDelivery.message_group_id == claim.message_group_id,
+            CommunityMessageGroupDelivery.discord_channel_id == claim.discord_channel_id,
+            CommunityMessageGroupDelivery.role == 'inbound',
+        ))
+        remaining = and_(claim.applied_revision.is_not(None), or_(
+            and_(claim.kind == 'post', proven_post,
+                 CommunityThreadGroup.view_revision > claim.applied_revision),
+            and_(claim.kind == 'comment', proven_comment,
+                 CommunityMessageGroup.view_revision > claim.applied_revision),
+        ))
         eligible = or_(
-            and_(claim.status == 'claimed',
-                 or_(claim.attempt_started_at.is_(None),
-                     claim.attempt_started_at <= now - self.LEASE), due_time),
+            # Preflight claims have no POST timestamp. They are due only if
+            # the explicit lease deadline expires, not if it is absent (legacy).
+            and_(claim.status == 'claimed', or_(
+                and_(claim.attempt_started_at.is_not(None),
+                     claim.attempt_started_at <= now - self.LEASE, due_time),
+                and_(claim.attempt_started_at.is_(None),
+                     claim.next_attempt_at.is_not(None),
+                     claim.next_attempt_at <= now),
+            )),
             and_(claim.status == 'unknown', due_time),
             and_(claim.status == 'completed', due_time, remaining),
         )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -418,6 +418,10 @@ class DiscordFanoutGroupRepository(BaseRepository):
             session.flush()
             return group
 
+    # Existing claim clocks distinguish preflight from a possibly begun POST.
+    # No new schema owner is required for an interrupted read-only Discord GET.
+    PREFLIGHT_LEASE = timedelta(minutes=2)
+
     def reserve_remote_target(
         self, *, kind: str, group_id: int, discord_channel_id: int
     ) -> RemoteTargetReservation:
@@ -474,7 +478,12 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 )
                 session.add(claim)
             claim.attempt_id = attempt_id
-            claim.attempt_started_at = datetime.now(timezone.utc)
+            # The initial reservation only authorizes read-only Discord lookup.
+            # Mark the possible POST boundary in confirm_remote_target_pre_send;
+            # otherwise a slow preflight can be mistaken for a lost ACK.
+            claim.attempt_started_at = None
+            claim.next_attempt_at = datetime.now(timezone.utc) + self.PREFLIGHT_LEASE
+            claim.last_error = None
             claim.status = "claimed"
             claim.reserved_view_revision = group.view_revision
             claim.reconciliation_marker_version = 1
@@ -504,7 +513,9 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 CommunityDiscordTargetClaim.attempt_id == attempt_id,
                 CommunityDiscordTargetClaim.status == "claimed",
             ))
-            if claim is None:
+            if claim is None or claim.attempt_started_at is not None:
+                # The token crosses the Discord POST boundary only once.
+                # A repeated confirm cannot authorize an accidental second POST.
                 return None
             group = session.get(CommunityThreadGroup if kind == "post"
                                 else CommunityMessageGroup, group_id)
@@ -525,6 +536,10 @@ class DiscordFanoutGroupRepository(BaseRepository):
             # A newer live Update is not a reason to discard a valid target.
             # Persist exactly the content/revision that the caller will render.
             claim.reserved_view_revision = group.view_revision
+            # This committed timestamp means a POST *may* have begun. From now
+            # on a lost callback must be reconciled, never blindly re-sent.
+            claim.attempt_started_at = datetime.now(timezone.utc)
+            claim.next_attempt_at = None
             return RemoteTargetReservation(
                 "reserved", attempt_id, group.view_revision, dict(group.display_object_json)
             )
@@ -565,6 +580,9 @@ class DiscordFanoutGroupRepository(BaseRepository):
         with self.immediate_session() as session:
             claim = self._claimed_target(session, kind, group_id, discord_channel_id, attempt_id)
             claim.status = status
+            # A definitive failed preflight or an ambiguous POST result must
+            # not inherit the preparation deadline as a retry/backoff timer.
+            claim.next_attempt_at = None
             if status == "failed":
                 # A proven pre-send failure never has a Discord history marker
                 # worth reconciling; the next reservation builds a fresh one.
