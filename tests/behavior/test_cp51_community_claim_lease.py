@@ -74,6 +74,10 @@ async def test_expired_preflight_can_retry_without_unknown_or_duplicate_post(tmp
     try:
         initial = repo.reserve_remote_target(kind='post', group_id=root_id, discord_channel_id=10)
         assert initial.state == 'reserved'
+        with db.session() as session:
+            pending = session.scalar(select(CommunityDiscordTargetClaim))
+            assert pending.attempt_started_at is None
+            assert pending.next_attempt_at is not None
         # A worker wakes after an old read-only Discord lookup. No POST began.
         with db.immediate_session() as session:
             claim = session.scalar(select(CommunityDiscordTargetClaim))
@@ -115,6 +119,7 @@ async def test_lost_ack_after_post_boundary_stays_unknown_without_repost(tmp_pat
             discord_channel_id=10, attempt_id=attempt.attempt_id) is not None
         with db.immediate_session() as session:
             claim = session.scalar(select(CommunityDiscordTargetClaim))
+            assert claim.attempt_started_at is not None  # POST may have begun.
             claim.attempt_started_at = datetime.now(timezone.utc) - timedelta(minutes=4)
         transport = _History(proven=None)
         worker = CommunityGroupViewDeliveryWorker(database=db, bot=object(),
@@ -137,7 +142,6 @@ async def test_unprovable_legacy_completed_and_unstarted_claimed_are_filtered_be
     """Unactionable historical claims do not consume writer transactions."""
     db, repo, root_id = _world(tmp_path/'legacy.sqlite')
     try:
-        now = datetime.now(timezone.utc)
         with db.immediate_session() as session:
             group = session.get(CommunityThreadGroup, root_id)
             group.view_revision = 1

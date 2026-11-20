@@ -348,6 +348,28 @@ offline data transfer. Do not simply change `PRAGMA user_version` or copy
 schema files over a populated database. Databases already stamped as v3 are
 also rejected; restore an appropriate source backup before migrating.
 
+For an existing **CP48/CP49 physical v2** development database (the exact
+snapshot without the two `view_source_updated_at` columns), first stop every
+Bridge/Gateway database writer, retain a verified full database/media backup,
+and obtain owner approval. Create a separate aligned copy with:
+
+```bash
+python -m scripts.align_dev_v2_group_view_timestamps \
+  --source /path/to/dev.sqlite3 \
+  --output /path/to/dev-aligned.sqlite3 \
+  --offline-confirmed
+```
+
+The command accepts only the exact CP49 v2 schema or already-current v2,
+checks the source's integrity/FKs, rebuilds the two Group tables with the exact
+current DDL, and verifies the entire resulting schema. All historical trusted
+source timestamps remain `NULL`, while Group revisions, Create snapshots,
+Discord IDs, and claims retain their existing values. The source is never
+modified and the output path must not exist. Verify the generated copy and
+replace a stopped development database only through the separately approved
+deployment/rollback procedure. Older CP35 v2 and `user_version=3` inputs are
+not accepted by this tool.
+
 For a clean DB or approved v0/v1 source, confirm `PRAGMA user_version=2`,
 `PRAGMA integrity_check=ok`, an empty `PRAGMA foreign_key_check`, and exact
 physical DDL agreement with `v2.sql`. A second startup must not write or
