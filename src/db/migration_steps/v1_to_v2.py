@@ -26,61 +26,48 @@ _REMOTE_TABLES = (
 )
 
 
-def _rebuild_check_constrained_table(conn: Connection, name: str) -> None:
-    """Recreate exact v2 DDL and copy the original columns, PKs and values."""
-    legacy = f"_v1_{name}"
-    conn.exec_driver_sql(f"ALTER TABLE {name} RENAME TO {legacy}")
-    # Named indexes on the renamed table otherwise occupy their old names.
-    for (index_name,) in conn.exec_driver_sql(
+def _rebuild_table(
+        conn: Connection, name: str, *, allow_added_columns: bool = False) -> None:
+    """Rebuild one v1 table using exact current v2 ORM DDL, preserving source IDs.
+
+    Constrained publication tables require an identical set of columns.
+    Group/receipt/claim tables may gain columns with declared v2 defaults or
+    NULL values; every legacy column still has to survive. The migration
+    runner owns FK suspension, and the caller owns legacy_alter_table mode.
+    """
+    previous = f"_v1_{name}"
+    conn.exec_driver_sql(f'ALTER TABLE "{name}" RENAME TO "{previous}"')
+    # Renaming leaves explicit index names occupied by the old table. Free
+    # them before SQLAlchemy creates the new table with its canonical indexes.
+    indexes = conn.exec_driver_sql(
         "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? "
-        "AND sql IS NOT NULL", (legacy,)
-    ).all():
+        "AND sql IS NOT NULL", (previous,),
+    )
+    index_names = [index_name for (index_name,) in indexes.all()]
+    indexes.close()
+    for index_name in index_names:
         conn.exec_driver_sql(f'DROP INDEX "{index_name}"')
 
     target = Base.metadata.tables[name]
     target.create(conn)
-    fields = tuple(column.name for column in target.columns)
-    source_fields = {
-        row[1] for row in conn.exec_driver_sql(f'PRAGMA table_info("{legacy}")')
-    }
-    if set(fields) != source_fields:
-        raise RuntimeError(f"v1→v2 incompatible columns for {name}")
-    names = ", ".join(f'"{field}"' for field in fields)
-    conn.exec_driver_sql(
-        f"INSERT INTO {name} ({names}) SELECT {names} FROM {legacy}"
-    )
-    conn.exec_driver_sql(f"DROP TABLE {legacy}")
-
-
-def _rebuild_additive_columns(conn: Connection, name: str) -> None:
-    """Add nullable/defaulted view and cursor fields without changing legacy IDs.
-
-    A physical table rebuild, rather than ALTER ADD COLUMN, makes exact schema
-    inspection independent of whether the database was upgraded from v1 or
-    bootstrapped directly from the updated v2 metadata. FK suspension is owned by the migration runner.
-    """
-    previous = f"_v1_{name}"
-    conn.exec_driver_sql(f'ALTER TABLE "{name}" RENAME TO "{previous}"')
-    # Explicit indexes keep their original names after RENAME, so release
-    # those names before the current ORM emits the exact target DDL.
-    indexes = conn.exec_driver_sql(
-        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
-        (previous,),
-    )
-    index_names = [name for (name,) in indexes.all()]
-    indexes.close()
-    for index_name in index_names:
-        conn.exec_driver_sql(f'DROP INDEX "{index_name}"')
-    table = Base.metadata.tables[name]
-    table.create(conn)
     old_columns = {
         row[1] for row in conn.exec_driver_sql(f'PRAGMA table_info("{previous}")')
     }
-    new_columns = {column.name for column in table.columns}
-    if not old_columns.issubset(new_columns):
-        raise RuntimeError(f"v1→v2 would discard a column in {name}")
-    fields = ", ".join(f'"{column.name}"' for column in table.columns if column.name in old_columns)
-    conn.exec_driver_sql(f'INSERT INTO "{name}" ({fields}) SELECT {fields} FROM "{previous}"')
+    new_columns = tuple(column.name for column in target.columns)
+    if allow_added_columns:
+        if not old_columns.issubset(new_columns):
+            raise RuntimeError(f"v1→v2 would discard a column in {name}")
+        copied = tuple(field for field in new_columns if field in old_columns)
+    else:
+        if set(new_columns) != old_columns:
+            raise RuntimeError(f"v1→v2 incompatible columns for {name}")
+        copied = new_columns
+    # Explicitly copy only proven v1 fields, letting the v2 DDL initialize
+    # newly added Group-view columns. Do not synthesize provenance or IDs.
+    fields = ", ".join(f'"{field}"' for field in copied)
+    conn.exec_driver_sql(
+        f'INSERT INTO "{name}" ({fields}) SELECT {fields} FROM "{previous}"'
+    )
     conn.exec_driver_sql(f'DROP TABLE "{previous}"')
 
 
@@ -186,13 +173,13 @@ def upgrade_v1_to_v2(conn: Connection, _profile: str, _config: object) -> None:
     try:
         conn.exec_driver_sql("PRAGMA legacy_alter_table=ON")
         for name in _REBUILT_TABLES:
-            _rebuild_check_constrained_table(conn, name)
+            _rebuild_table(conn, name)
     finally:
         conn.exec_driver_sql("PRAGMA legacy_alter_table=OFF")
     # Community Group and claim rows predate remote Person feeds. Rebuild
     # them within the *same* v1→v2 transaction, retaining all original keys.
     for name in _GROUP_VIEW_TABLES:
-        _rebuild_additive_columns(conn, name)
+        _rebuild_table(conn, name, allow_added_columns=True)
     # Newly added tables have no old rows and are created only after the
     # referenced constrained tables have been restored under their old names.
     Base.metadata.create_all(

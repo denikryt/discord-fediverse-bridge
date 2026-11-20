@@ -15,6 +15,7 @@ import json
 from typing import Any, Callable, Awaitable
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from ..activitypub_models import ActivityPubEvent
 from ..inbound_activity_outcomes import InboundActivityOutcome
@@ -51,6 +52,30 @@ class GroupMutationConflict(ValueError):
 
 class GroupMutationDenied(ValueError):
     """No verified Group or owner may modify this immutable Create."""
+
+
+def _read_duplicate_receipt(
+        session: Session, delivery_id: str, fingerprint: str) -> ProjectionReceipt | None:
+    """Apply the same payload-bound replay rule before and inside the writer.
+
+    The early read avoids unnecessary Actor network verification for an
+    already accepted Activity. The writer repeats it after BEGIN IMMEDIATE
+    because another delivery may have committed while Actor GET was pending.
+    """
+    prior = session.scalar(select(ActivityPubEventReceipt).where(
+        ActivityPubEventReceipt.delivery_id == delivery_id,
+        ActivityPubEventReceipt.verified_destination_group_actor_id.is_(None),
+    ))
+    if prior is None:
+        return None
+    # A legacy incomplete receipt cannot prove a committed Group revision;
+    # never turn it into a fabricated duplicate acknowledgment.
+    if prior.mutation_fingerprint != fingerprint:
+        raise GroupMutationConflict('authenticated activity ID has different payload')
+    if prior.status != 'processed':
+        raise GroupMutationConflict('legacy incomplete receipt requires manual audit')
+    return ProjectionReceipt('duplicate', prior.outcome or 'applied',
+                             prior.detail or 'already applied', prior.group_view_revision)
 
 
 def _targets(raw: object) -> set[str]:
@@ -254,17 +279,9 @@ class GroupViewMutationService:
         # Follow is cancelled. This read is only an optimization: the writer
         # transaction repeats the exact same receipt check before admission.
         with self.database.session() as session:
-            prior = session.scalar(select(ActivityPubEventReceipt).where(
-                ActivityPubEventReceipt.delivery_id == event.delivery_id,
-                ActivityPubEventReceipt.verified_destination_group_actor_id.is_(None),
-            ))
-            if prior is not None:
-                if prior.mutation_fingerprint != fingerprint:
-                    raise GroupMutationConflict('authenticated activity ID has different payload')
-                if prior.status != 'processed':
-                    raise GroupMutationConflict('legacy incomplete receipt requires manual audit')
-                return ProjectionReceipt('duplicate', prior.outcome or 'applied',
-                                         prior.detail or 'already applied', prior.group_view_revision)
+            duplicate = _read_duplicate_receipt(session, event.delivery_id, fingerprint)
+            if duplicate is not None:
+                return duplicate
         if not self.policy.federation_decision(group).allowed or not self.policy.federation_decision(event.actor_id).allowed:
             raise GroupMutationDenied('Group or actor denied by federation policy')
         # Network validation uses the currently configured, accepted Follow as
@@ -280,19 +297,11 @@ class GroupViewMutationService:
                 raise GroupMutationDenied('unverified active NodeBB Group or inbox')
         with self.database.immediate_session() as session:
             # Old in_progress receipts cannot be proved to have committed a
-            # projection. Leave them for the explicit pre-v3 audit, not an
+            # projection. Leave them for an explicit legacy receipt audit, not an
             # unsafe automatic reset or a forged duplicate acknowledgment.
-            receipt = session.scalar(select(ActivityPubEventReceipt).where(
-                ActivityPubEventReceipt.delivery_id == event.delivery_id,
-                ActivityPubEventReceipt.verified_destination_group_actor_id.is_(None),
-            ))
-            if receipt is not None:
-                if receipt.mutation_fingerprint != fingerprint:
-                    raise GroupMutationConflict('authenticated activity ID has different payload')
-                if receipt.status != 'processed':
-                    raise GroupMutationConflict('legacy incomplete receipt requires manual audit')
-                return ProjectionReceipt('duplicate', receipt.outcome or 'applied',
-                                         receipt.detail or 'already applied', receipt.group_view_revision)
+            duplicate = _read_duplicate_receipt(session, event.delivery_id, fingerprint)
+            if duplicate is not None:
+                return duplicate
             if not session.scalar(select(ChannelCommunitySubscription.id).where(
                 ChannelCommunitySubscription.lemmy_community_actor_id == group,
                 ChannelCommunitySubscription.status == 'accepted',

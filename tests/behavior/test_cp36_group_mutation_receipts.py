@@ -108,6 +108,45 @@ async def test_group_receipt_retains_canonical_payload_identity_across_later_mut
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('competing_body', ['A', 'B'])
+async def test_receipt_inserted_during_actor_verification_is_rechecked_under_writer_lock(
+        tmp_path: Path, competing_body: str) -> None:
+    """A concurrent signed delivery cannot double-apply or hide payload conflict.
+
+    The first handler sees no receipt before its Actor GET. A second handler
+    commits the wire ID while that external verification is in progress; the
+    first handler must re-read the receipt inside its own BEGIN IMMEDIATE.
+    """
+    db, service = _setup(tmp_path / f'actor-race-{competing_body}.db')
+    competitor = GroupViewMutationService(db, _Allow(), actor_reader=_actor)
+    checks = []
+
+    async def actor_with_concurrent_delivery(group: str) -> dict:
+        """Commit a competing authorized event while the first GET is pending."""
+        checks.append(await competitor.apply(_update(1, competing_body)))
+        return await _actor(group)
+
+    service.actor_reader = actor_with_concurrent_delivery
+    try:
+        if competing_body == 'A':
+            receipt = await service.apply(_update(1, 'A'))
+            assert receipt.status == 'duplicate'
+            assert receipt.revision == 1
+        else:
+            with pytest.raises(GroupMutationConflict, match='different payload'):
+                await service.apply(_update(1, 'A'))
+        assert len(checks) == 1 and checks[0].revision == 1
+        with db.session() as session:
+            group = session.scalar(select(CommunityThreadGroup))
+            receipts = session.scalars(select(ActivityPubEventReceipt)).all()
+            assert group.view_revision == 1
+            assert group.display_object_json['body_markdown'] == competing_body
+            assert len(receipts) == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
 async def test_failed_signature_cannot_commit_receipt_or_view(tmp_path: Path) -> None:
     """A forged outer signer is not authorized merely by its inner Note actor."""
     db, service = _setup(tmp_path / 'denials.db')
