@@ -80,3 +80,80 @@ def test_lost_ack_keeps_one_unresolved_claim_without_duplicate_post(tmp_path: Pa
             assert session.scalars(select(CommunityThreadGroupDelivery)).all() == []
     finally:
         db.close()
+
+
+def test_pre_send_refreshes_only_current_live_revision(tmp_path: Path) -> None:
+    """A read-only Discord GET racing with Update must not orphan the target."""
+    from src.models import CommunityThreadGroup, CommunityMessageGroup
+    db, root_id = _world(tmp_path / 'pre-send-refresh.db')
+    repo = db.discord_fanout_groups
+    try:
+        first = repo.reserve_remote_target(kind='post', group_id=root_id, discord_channel_id=101)
+        assert first.state == 'reserved' and first.view_revision == 0
+        with db.immediate_session() as session:
+            root = session.get(CommunityThreadGroup, root_id)
+            root.view_revision = 1
+            root.display_object_json = {**root.display_object_json, 'body_markdown': 'Live update'}
+        refreshed = repo.confirm_remote_target_pre_send(kind='post', group_id=root_id,
+            discord_channel_id=101, attempt_id=first.attempt_id)
+        assert refreshed is not None
+        assert refreshed.attempt_id == first.attempt_id
+        assert refreshed.view_revision == 1
+        assert refreshed.display_object_json['body_markdown'] == 'Live update'
+        repo.finish_remote_target(kind='post', group_id=root_id, discord_channel_id=101,
+            attempt_id=first.attempt_id, discord_thread_id=301, discord_object_id=301)
+        with db.session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim))
+            assert claim.applied_revision == 1 and claim.status == 'completed'
+
+        # A different claim is still blocked by a tombstone, not refreshed.
+        second = repo.reserve_remote_target(kind='post', group_id=root_id, discord_channel_id=102)
+        with db.immediate_session() as session:
+            root = session.get(CommunityThreadGroup, root_id)
+            root.view_state = 'deleted'
+            root.view_revision = 2
+        assert repo.confirm_remote_target_pre_send(kind='post', group_id=root_id,
+            discord_channel_id=102, attempt_id=second.attempt_id) is None
+        with db.session() as session:
+            claims = list(session.scalars(select(CommunityDiscordTargetClaim)))
+            assert {row.discord_channel_id: row.status for row in claims}[102] == 'failed'
+
+        # Comment preflight uses the same typed claim boundary, not root FK.
+        message = repo.get_or_create_remote_message_group(
+            community_actor_id=GROUP, ap_object_id=NOTE+'/comment',
+            source_owner_actor_id=OWNER, ap_activity_id=NOTE+'/comment/create',
+            thread_group_id=root_id, parent_message_group_id=None,
+            first_object_json={'ap_id': NOTE+'/comment', 'kind': 'comment',
+                               'body_markdown': 'Reply', 'post_ap_id': NOTE,
+                               'parent_ap_id': NOTE})
+        reply_attempt = repo.reserve_remote_target(kind='comment', group_id=message.id,
+                                                    discord_channel_id=101)
+        with db.immediate_session() as session:
+            reply = session.get(CommunityMessageGroup, message.id)
+            reply.view_revision = 1
+            reply.display_object_json = {**reply.display_object_json, 'body_markdown': 'Reply updated'}
+        ready = repo.confirm_remote_target_pre_send(kind='comment', group_id=message.id,
+            discord_channel_id=101, attempt_id=reply_attempt.attempt_id)
+        assert ready is not None and ready.view_revision == 1
+        assert ready.display_object_json['body_markdown'] == 'Reply updated'
+    finally:
+        db.close()
+
+
+def test_pre_send_withdrawn_subscription_cannot_reuse_attempt(tmp_path: Path) -> None:
+    """A removed Group binding forbids outbound POST even for an owned claim."""
+    from src.models import ChannelCommunitySubscription
+    db, root_id = _world(tmp_path / 'pre-send-revoked.db')
+    repo = db.discord_fanout_groups
+    try:
+        attempt = repo.reserve_remote_target(kind='post', group_id=root_id, discord_channel_id=101)
+        with db.immediate_session() as session:
+            row = session.scalar(select(ChannelCommunitySubscription).where(
+                ChannelCommunitySubscription.discord_channel_id == 101))
+            row.status = 'cancelled'
+        assert repo.confirm_remote_target_pre_send(kind='post', group_id=root_id,
+            discord_channel_id=101, attempt_id=attempt.attempt_id) is None
+        assert repo.reserve_remote_target(kind='post', group_id=root_id,
+                                          discord_channel_id=101).state == 'not_subscribed'
+    finally:
+        db.close()

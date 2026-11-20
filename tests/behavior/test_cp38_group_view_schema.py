@@ -67,6 +67,7 @@ def test_populated_v1_to_updated_v2_retains_proof_and_unknown_claims(tmp_path: P
         with db.session() as sess:
             group = sess.get(CommunityThreadGroup, 1)
             assert group.view_revision == 0 and group.view_state == 'live'
+            assert group.view_source_updated_at is None
             assert group.inbound_create_snapshot_json == _post_json()
             assert group.display_object_json == _post_json()
             claims = {c.discord_channel_id: c for c in sess.scalars(select(CommunityDiscordTargetClaim))}
@@ -173,3 +174,23 @@ def test_feed_middle_omission_does_not_append_ellipsis_to_raw_url() -> None:
     assert url in content
     assert url + '…' not in content
     assert content.splitlines()[-1] == POST
+
+
+def test_old_physical_v2_without_trusted_clock_is_refused_read_only(tmp_path: Path) -> None:
+    """A v2 label never silently upgrades CP49's ambiguous receive-time column."""
+    path = tmp_path / 'old-clock-v2.db'
+    snapshot = (Path(__file__).parents[2] / 'src/db/schema_versions/v2.sql').read_text()
+    # Model an existing CP49 physical v2: its view_updated_at held a
+    # bridge-local receipt time, which cannot be trusted as source ordering.
+    old_snapshot = snapshot.replace('\tview_source_updated_at DATETIME,\n', '')
+    with sqlite3.connect(path) as conn:
+        conn.executescript(old_snapshot)
+        conn.execute('PRAGMA user_version=2')
+    before = path.read_bytes()
+    db = Database(f'sqlite:///{path}')
+    try:
+        with pytest.raises(RuntimeError, match='physical schema differs'):
+            db.migrate()
+        assert path.read_bytes() == before
+    finally:
+        db.close()

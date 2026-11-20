@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 
 from ..formatting import (has_feed_comment_identity, render_remote_community_root,
                           render_remote_community_comment)
@@ -189,6 +189,8 @@ class CommunityGroupViewDeliveryWorker:
     RETRY_DELAY = timedelta(minutes=5)
     LEASE = timedelta(minutes=2)
     MAX_NETWORK_ACTIONS = 20
+    PAGE_SIZE = 48
+    MAX_SCANNED_CLAIMS = 144
 
     def __init__(self, *, database: object, bot: object,
                  policy_service: object, transport: object | None = None) -> None:
@@ -394,41 +396,94 @@ class CommunityGroupViewDeliveryWorker:
             claim.next_attempt_at = None if (claim.applied_revision is not None
                 and claim.applied_revision >= group.view_revision) else now
 
-    async def drain_once(self) -> int:
-        """Rotate a bounded number of network attempts across the due claims."""
+    def _due_claim_page(self, *, after_id: int, before_or_at: int | None,
+                        limit: int, now: datetime) -> list[int]:
+        """Fetch a bounded page of due IDs without per-claim writer locks.
+
+        Completed unchanged copies are filtered at the read boundary; claimed
+        requests are eligible only after their Create lease expires. The
+        separate writer CAS still rechecks rights, state and exact revisions.
+        """
+        claim = CommunityDiscordTargetClaim
+        due_time = or_(claim.next_attempt_at.is_(None), claim.next_attempt_at <= now)
+        # A NULL legacy cursor needs inspection, but a fully caught-up
+        # completed claim must not consume scan space or BEGIN IMMEDIATE.
+        remaining = or_(
+            and_(claim.kind == 'post', CommunityThreadGroup.view_revision >
+                 func.coalesce(claim.applied_revision, -1)),
+            and_(claim.kind == 'comment', CommunityMessageGroup.view_revision >
+                 func.coalesce(claim.applied_revision, -1)),
+        )
+        eligible = or_(
+            and_(claim.status == 'claimed',
+                 or_(claim.attempt_started_at.is_(None),
+                     claim.attempt_started_at <= now - self.LEASE), due_time),
+            and_(claim.status == 'unknown', due_time),
+            and_(claim.status == 'completed', due_time, remaining),
+        )
+        query = (select(claim.id)
+                 .outerjoin(CommunityThreadGroup, claim.thread_group_id == CommunityThreadGroup.id)
+                 .outerjoin(CommunityMessageGroup, claim.message_group_id == CommunityMessageGroup.id)
+                 .where(claim.id > after_id, eligible)
+                 .order_by(claim.id).limit(limit))
+        if before_or_at is not None:
+            query = query.where(claim.id <= before_or_at)
         with self.database.session() as session:
-            ids = list(session.scalars(select(CommunityDiscordTargetClaim.id).where(
-                CommunityDiscordTargetClaim.status.in_(('claimed', 'unknown', 'completed')),
-            ).order_by(CommunityDiscordTargetClaim.id)))
-        after = [i for i in ids if i > self._last_scanned_claim_id]
-        before = [i for i in ids if i <= self._last_scanned_claim_id]
-        attempted = 0
-        for claim_id in after + before:
-            if attempted >= self.MAX_NETWORK_ACTIONS:
-                break
-            snapshot = self._reserve_claim(claim_id)
-            if snapshot is None:
+            return list(session.scalars(query))
+
+    async def drain_once(self) -> int:
+        """Page due claims with independent scan and Discord action budgets.
+
+        Cursor advancement happens for every examined ID, including a claim
+        rejected by the CAS. One drain cannot scan the entire historical table,
+        while later drains still reach a low-frequency target behind hot rows.
+        """
+        now = datetime.now(timezone.utc)
+        first_id = self._last_scanned_claim_id
+        after_id = first_id
+        wrapped = False
+        scanned = attempted = 0
+        while scanned < self.MAX_SCANNED_CLAIMS and attempted < self.MAX_NETWORK_ACTIONS:
+            page = self._due_claim_page(
+                after_id=after_id,
+                before_or_at=first_id if wrapped else None,
+                limit=min(self.PAGE_SIZE, self.MAX_SCANNED_CLAIMS - scanned),
+                now=now,
+            )
+            if not page:
+                if wrapped or first_id == 0:
+                    break
+                # At the end, wrap at most once and stop at the starting ID;
+                # never check a claim twice in the same drain.
+                wrapped = True
+                after_id = 0
                 continue
-            attempted += 1
-            self._last_scanned_claim_id = claim_id
-            try:
-                if snapshot.operation == 'reconcile':
-                    result = await self.transport.reconcile(snapshot)
-                    self._finish(snapshot, proven=result, error=None)
-                else:
-                    await self.transport.edit(snapshot)
-                    self._finish(snapshot, proven=None, error=None)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                if (snapshot.operation == 'edit' and snapshot.view_state == 'deleted'
-                        and getattr(exc, 'status', None) == 404
-                        and getattr(exc, 'code', None) == 10008):
-                    # The exact known Discord message is already gone. That is
-                    # a successful cleanup of the committed Group tombstone;
-                    # unrelated 404s and live Update errors remain retryable.
-                    self._finish(snapshot, proven=None, error=None)
-                else:
-                    self._finish(snapshot, proven=None, error=str(exc))
-                    logger.exception('Community Group view delivery failed for claim=%s', claim_id)
+            for claim_id in page:
+                after_id = claim_id
+                self._last_scanned_claim_id = claim_id
+                scanned += 1
+                snapshot = self._reserve_claim(claim_id)
+                if snapshot is None:
+                    continue
+                attempted += 1
+                try:
+                    if snapshot.operation == 'reconcile':
+                        result = await self.transport.reconcile(snapshot)
+                        self._finish(snapshot, proven=result, error=None)
+                    else:
+                        await self.transport.edit(snapshot)
+                        self._finish(snapshot, proven=None, error=None)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if (snapshot.operation == 'edit' and snapshot.view_state == 'deleted'
+                            and getattr(exc, 'status', None) == 404
+                            and getattr(exc, 'code', None) == 10008):
+                        # The exact known Discord message is already absent.
+                        self._finish(snapshot, proven=None, error=None)
+                    else:
+                        self._finish(snapshot, proven=None, error=str(exc))
+                        logger.exception('Community Group view delivery failed for claim=%s', claim_id)
+                if attempted >= self.MAX_NETWORK_ACTIONS:
+                    break
         return attempted

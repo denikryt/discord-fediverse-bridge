@@ -485,12 +485,12 @@ class DiscordFanoutGroupRepository(BaseRepository):
 
     def confirm_remote_target_pre_send(
         self, *, kind: str, group_id: int, discord_channel_id: int, attempt_id: str,
-    ) -> bool:
-        """Recheck the reserved Group revision immediately before Discord POST.
+    ) -> RemoteTargetReservation | None:
+        """Refresh this attempt to the current live Group view before REST.
 
-        All read-only Discord channel/parent checks may suspend this caller.
-        A tombstone, revision advance, removed subscription or replaced attempt
-        during those awaits must suppress an unstarted outbound Create.
+        Read-only Discord lookups can race with a signed Group Update. The same
+        claim may use its new live revision without another Create or token;
+        a tombstone or cancelled binding still fences an unstarted POST.
         """
         if kind not in ("post", "comment"):
             raise ValueError("invalid remote target kind")
@@ -505,22 +505,29 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 CommunityDiscordTargetClaim.status == "claimed",
             ))
             if claim is None:
-                return False
+                return None
             group = session.get(CommunityThreadGroup if kind == "post"
                                 else CommunityMessageGroup, group_id)
             still_allowed = (group is not None and group.view_state == "live"
-                and group.view_revision == claim.reserved_view_revision
+                and isinstance(group.display_object_json, dict)
                 and session.scalar(select(ChannelCommunitySubscription.id).where(
                     ChannelCommunitySubscription.discord_channel_id == discord_channel_id,
                     ChannelCommunitySubscription.lemmy_community_actor_id == group.community_actor_id,
                     ChannelCommunitySubscription.status == "accepted",
                 )) is not None)
             if not still_allowed:
-                # This attempt has not crossed the POST boundary, so failure
-                # (not unknown) can be re-reserved against a newer live view.
+                # This attempt never crossed the POST boundary. Unlike a lost
+                # acknowledgment, its failure is proven and can be re-reserved
+                # if a legitimate live placement is later admitted.
                 claim.status = "failed"
                 claim.reconciliation_marker_version = None
-            return still_allowed
+                return None
+            # A newer live Update is not a reason to discard a valid target.
+            # Persist exactly the content/revision that the caller will render.
+            claim.reserved_view_revision = group.view_revision
+            return RemoteTargetReservation(
+                "reserved", attempt_id, group.view_revision, dict(group.display_object_json)
+            )
 
     def finish_remote_target(
         self, *, kind: str, group_id: int, discord_channel_id: int, attempt_id: str,

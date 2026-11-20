@@ -321,6 +321,13 @@ fingerprint. Verify a second startup is read-only.
 
 The application schema version remains **2**. `src/db/schema_versions/v2.sql`
 contains the Group-view, receipt-fingerprint and typed claim-cursor fields.
+The Group root/comment rows now also have nullable `view_source_updated_at`:
+only a verified signed Update timestamp advances this clock; the older
+`view_updated_at` is a local commit time and cannot order remote revisions.
+A source Update without a timestamp may still advance the local revision,
+without overwriting the last verified source clock. For CP48/CP49 data,
+`view_updated_at` may contain a received-at timestamp; **do not copy it into
+`view_source_updated_at`** during a separately approved offline alignment.
 The automatic migration chain is exclusively `v0→v1→v2`, using the existing
 single-writer transaction, strict source DDL validation and protected backup.
 `v1→v2` rebuilds the four pre-existing Group/receipt/claim tables alongside

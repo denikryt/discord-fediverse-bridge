@@ -381,8 +381,11 @@ class GroupViewMutationService:
                     # A Group-specific tombstone is terminal even for later
                     # author-signed Updates or an out-of-order old Activity.
                     continue
-                if source_time is not None and group_row.view_updated_at is not None:
-                    prior_time = group_row.view_updated_at
+                if source_time is not None and group_row.view_source_updated_at is not None:
+                    # Compare only timestamps authenticated by the signed source.
+                    # v2 snapshots written by CP48/49 used view_updated_at as
+                    # the bridge's receive time, never trusted Note ordering.
+                    prior_time = group_row.view_source_updated_at
                     if prior_time.tzinfo is None:
                         prior_time = prior_time.replace(tzinfo=timezone.utc)
                     if source_time <= prior_time.astimezone(timezone.utc):
@@ -401,10 +404,21 @@ class GroupViewMutationService:
                         updated['title'] = event.object.title
                     group_row.display_object_json = updated
                 group_row.view_revision += 1
-                group_row.view_updated_at = source_time or datetime.now(timezone.utc)
+                group_row.view_updated_at = datetime.now(timezone.utc)
+                if source_time is not None:
+                    # A timestampless intermediate Update advances the local
+                    # revision but cannot destroy the last trusted source clock.
+                    group_row.view_source_updated_at = source_time
                 group_row.last_view_activity_id = event.source_activity_id or event.delivery_id
                 changed += 1
-            detail = 'Group view committed' if changed else 'Group object already deleted'
+            # A stale signed Update is a processed non-mutating event, not a
+            # tombstone. Its terminal receipt still fences conflicting replays.
+            if changed:
+                detail = 'Group view committed'
+            elif all(row.view_state == 'deleted' for row in verified_rows):
+                detail = 'Group object already deleted'
+            else:
+                detail = 'Stale Group Update ignored'
             outcome = (InboundActivityOutcome.APPLIED.value if changed else
                        InboundActivityOutcome.IGNORED_ALREADY_APPLIED.value)
             revision = (verified_rows[0].view_revision if len(verified_rows) == 1 else None)

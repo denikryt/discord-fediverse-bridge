@@ -261,3 +261,42 @@ async def test_unzoned_group_update_timestamp_cannot_bypass_source_order(tmp_pat
             assert session.scalars(select(ActivityPubEventReceipt)).all() == []
     finally:
         db.close()
+
+@pytest.mark.asyncio
+async def test_source_clock_survives_timestampless_update_and_legacy_receive_time(tmp_path: Path) -> None:
+    """Signed source ordering is independent of the bridge's receive clock."""
+    db, service = _setup(tmp_path / 'source-clock.db')
+
+    def with_timestamp(number: int, body: str, stamp: str | None) -> ActivityPubEvent:
+        """Build one fully signed normalized Update with optional Note.updated."""
+        event = _update(number, body)
+        source = dict(event.source_activity_json)
+        source['object'] = dict(source['object'])
+        if stamp is not None:
+            source['object']['updated'] = stamp
+        return event.model_copy(update={'source_activity_json': source})
+
+    try:
+        first = await service.apply(with_timestamp(1, 'A', '2026-11-18T12:00:00Z'))
+        assert first.revision == 1
+        second = await service.apply(with_timestamp(2, 'B', None))
+        assert second.revision == 2
+        third = await service.apply(with_timestamp(3, 'C', '2026-11-18T12:01:00Z'))
+        assert third.revision == 3
+        stale = await service.apply(with_timestamp(4, 'OLD', '2026-11-18T11:59:00Z'))
+        assert stale.revision == 3
+        assert 'stale' in stale.detail.lower() and 'deleted' not in stale.detail.lower()
+        with db.session() as session:
+            row = session.scalar(select(CommunityThreadGroup))
+            assert row.display_object_json['body_markdown'] == 'C'
+            assert row.view_source_updated_at.replace(tzinfo=timezone.utc) == datetime(2026, 11, 18, 12, 1, tzinfo=timezone.utc)
+        # Before this new column existed, a CP48/49 committed row stored the
+        # *receive* time in view_updated_at. It is not trusted source ordering.
+        with db.immediate_session() as session:
+            row = session.scalar(select(CommunityThreadGroup))
+            row.view_updated_at = datetime(2026, 11, 20, 15, 0, tzinfo=timezone.utc)
+            row.view_source_updated_at = None
+        after_legacy = await service.apply(with_timestamp(5, 'After legacy', '2026-11-18T12:02:00Z'))
+        assert after_legacy.revision == 4
+    finally:
+        db.close()

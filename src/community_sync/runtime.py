@@ -379,9 +379,24 @@ class CommunityRuntime:
             # Revalidate the original reserved revision immediately before
             # crossing the Discord Create boundary, without holding a lock
             # over any network call.
-            if not repository.confirm_remote_target_pre_send(
-                    kind="post", group_id=thread_group.id, discord_channel_id=channel,
-                    attempt_id=attempt):
+            pre_send = repository.confirm_remote_target_pre_send(
+                kind="post", group_id=thread_group.id, discord_channel_id=channel,
+                attempt_id=attempt)
+            if pre_send is None:
+                continue
+            # The writer has refreshed this same reserved attempt to the last
+            # committed live Group body. Never render the stale pre-GET copy.
+            try:
+                canonical_event = event.model_copy(update={
+                    "object": ActivityPubObject.model_validate(pre_send.display_object_json),
+                })
+            except (TypeError, ValueError):
+                # A malformed refreshed representation has never crossed the
+                # Discord network boundary; preserve a proven failed claim.
+                repository.mark_remote_target(kind="post", group_id=thread_group.id,
+                    discord_channel_id=channel, attempt_id=attempt, status="failed")
+                logger.exception("Remote Group root view was invalid before POST: group=%s target=%s",
+                                 thread_group.id, channel)
                 continue
             try:
                 thread_id, starter_id = await _create_inbound_discord_thread(
@@ -538,9 +553,23 @@ class CommunityRuntime:
                 continue
             # Discord thread resolution and reply-reference lookup can suspend
             # this attempt while a Group Delete commits. Recheck before send.
-            if not repository.confirm_remote_target_pre_send(
-                    kind="comment", group_id=message_group.id, discord_channel_id=channel,
-                    attempt_id=attempt):
+            pre_send = repository.confirm_remote_target_pre_send(
+                kind="comment", group_id=message_group.id, discord_channel_id=channel,
+                attempt_id=attempt)
+            if pre_send is None:
+                continue
+            # Update may have committed while resolving this reply's parent;
+            # its original claim must deliver the current body exactly once.
+            try:
+                canonical_event = event.model_copy(update={
+                    "object": ActivityPubObject.model_validate(pre_send.display_object_json),
+                })
+            except (TypeError, ValueError):
+                # The reference is already resolved, but no message was sent.
+                repository.mark_remote_target(kind="comment", group_id=message_group.id,
+                    discord_channel_id=channel, attempt_id=attempt, status="failed")
+                logger.exception("Remote Group reply view was invalid before POST: group=%s target=%s",
+                                 message_group.id, channel)
                 continue
             try:
                 message = await _send_inbound_comment(thread=thread, event=canonical_event, reference=reference)

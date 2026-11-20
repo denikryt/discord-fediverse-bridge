@@ -430,3 +430,86 @@ async def test_404_unknown_message_does_not_complete_live_update(tmp_path: Path)
             assert claim.applied_revision == 0 and claim.next_attempt_at is not None
     finally:
         db.close()
+
+@pytest.mark.asyncio
+async def test_idle_completed_claims_are_not_writer_scanned(tmp_path: Path) -> None:
+    """An idle drain pages due rows and opens no per-claim writer transactions."""
+    db, repo, group_id = _setup(tmp_path)
+    try:
+        for index in range(60):
+            root = repo.get_or_create_remote_thread_group(
+                community_actor_id=GROUP, ap_object_id=f'{NOTE}/idle/{index}',
+                source_owner_actor_id=OWNER, ap_activity_id=f'{NOTE}/idle/{index}/create',
+                first_object_json={'ap_id': f'{NOTE}/idle/{index}', 'kind': 'post',
+                                   'body_markdown': 'First', 'author_name': 'bob'})
+            reservation = repo.reserve_remote_target(kind='post', group_id=root.id, discord_channel_id=10)
+            repo.finish_remote_target(kind='post', group_id=root.id, discord_channel_id=10,
+                attempt_id=reservation.attempt_id, discord_thread_id=1000 + index,
+                discord_object_id=1000 + index)
+        transport = _Transport()
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=object(),
+            policy_service=_Policy(), transport=transport)
+        writes = 0
+        original = db.immediate_session
+
+        def tracked():
+            """Count only writer transactions; read-only candidate pages are fine."""
+            nonlocal writes
+            writes += 1
+            return original()
+
+        db.immediate_session = tracked
+        assert await worker.drain_once() == 0
+        assert writes == 0
+        assert transport.edited == []
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_paginated_scan_reaches_late_due_copy_without_unbounded_writers(tmp_path: Path) -> None:
+    """Many markerless unknowns cannot consume unbounded work or hide a late Edit."""
+    db, repo, group_id = _setup(tmp_path)
+    try:
+        for index in range(26):
+            obj = f'{NOTE}/unknown/{index}'
+            root = repo.get_or_create_remote_thread_group(
+                community_actor_id=GROUP, ap_object_id=obj,
+                source_owner_actor_id=OWNER, ap_activity_id=obj+'/create',
+                first_object_json={'ap_id': obj, 'kind': 'post',
+                                   'body_markdown': 'First', 'author_name': 'bob'})
+            reserved = repo.reserve_remote_target(kind='post', group_id=root.id, discord_channel_id=10)
+            repo.mark_remote_target(kind='post', group_id=root.id, discord_channel_id=10,
+                                    attempt_id=reserved.attempt_id, status='unknown')
+            with db.immediate_session() as session:
+                claim = session.scalar(select(CommunityDiscordTargetClaim).where(
+                    CommunityDiscordTargetClaim.thread_group_id == root.id))
+                claim.reconciliation_marker_version = None
+        late = repo.reserve_remote_target(kind='post', group_id=group_id, discord_channel_id=10)
+        repo.finish_remote_target(kind='post', group_id=group_id, discord_channel_id=10,
+            attempt_id=late.attempt_id, discord_thread_id=900, discord_object_id=900)
+        with db.immediate_session() as session:
+            session.get(CommunityThreadGroup, group_id).view_revision = 1
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=object(),
+            policy_service=_Policy(), transport=_Transport())
+        worker.MAX_SCANNED_CLAIMS = 10
+        worker.PAGE_SIZE = 4
+        original = db.immediate_session
+        writes = 0
+
+        def count_writes():
+            """Record each preflight claim lock and result commit."""
+            nonlocal writes
+            writes += 1
+            return original()
+
+        db.immediate_session = count_writes
+        for _ in range(3):
+            before = writes
+            assert await worker.drain_once() <= worker.MAX_NETWORK_ACTIONS
+            assert writes - before <= worker.MAX_SCANNED_CLAIMS + 1
+        with db.session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim).where(
+                CommunityDiscordTargetClaim.thread_group_id == group_id))
+            assert claim.applied_revision == 1
+    finally:
+        db.close()

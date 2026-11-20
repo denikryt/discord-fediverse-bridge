@@ -724,3 +724,76 @@ async def test_group_delete_during_thread_lookup_fences_unstarted_comment(tmp_pa
         claim = session.scalar(select(CommunityDiscordTargetClaim))
         assert claim.status == 'failed'
     database.close()
+
+@pytest.mark.asyncio
+async def test_live_group_update_during_root_preflight_sends_current_body(tmp_path: Path) -> None:
+    """A pre-POST Update refreshes the same claim instead of losing the target."""
+    from src.models import CommunityThreadGroup, CommunityDiscordTargetClaim
+    from sqlalchemy import select
+    db = _database(tmp_path)
+    _accepted_subscription(db, channel_id=100)
+    forum = _fake_forum_channel(channel_id=100, thread_id=200, starter_message_id=300)
+    bot = _fake_bot(forum_channels={100: forum})
+    original_fetch = bot.fetch_forum_channel
+
+    async def update_during_get(channel_id: int):
+        """Commit the new current Group view before Discord POST begins."""
+        result = await original_fetch(channel_id)
+        with db.immediate_session() as session:
+            group = session.scalar(select(CommunityThreadGroup))
+            group.view_revision = 1
+            group.display_object_json = {**group.display_object_json, 'body_markdown': 'Updated in preflight'}
+        return result
+
+    bot.fetch_forum_channel = update_during_get
+    runtime = _community_runtime(db, _publish_gateway(), bot=bot)
+    try:
+        result = await runtime.handle_inbound_post(_fake_post_event(), SimpleNamespace(
+            database=db, bot=bot, community_runtime=runtime,
+            bridge_policy_service=build_test_policy_service(db)))
+        assert result.status == 'processed'
+        assert forum.create_thread.await_count == 1
+        assert 'Updated in preflight' in forum.create_thread.await_args.kwargs['content']
+        assert 'Post body' not in forum.create_thread.await_args.kwargs['content']
+        with db.session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim))
+            assert claim.status == 'completed' and claim.applied_revision == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_live_group_update_during_comment_preflight_sends_current_body(tmp_path: Path) -> None:
+    """A parent lookup interrupted by a live Update still emits one current reply."""
+    from src.models import CommunityMessageGroup, CommunityDiscordTargetClaim
+    from sqlalchemy import select
+    db = _database(tmp_path)
+    _accepted_subscription(db, channel_id=100)
+    _create_thread_group_for_inbound(db, channel_id=100, thread_id=200)
+    thread = _fake_thread(thread_id=200, sent_message_id=400)
+    bot = _fake_bot(threads={200: thread})
+    original_get = bot.get_thread_by_id
+
+    async def update_during_lookup(thread_id: int):
+        """Advance the Group view while resolving the existing Discord thread."""
+        result = await original_get(thread_id)
+        with db.immediate_session() as session:
+            group = session.scalar(select(CommunityMessageGroup))
+            group.view_revision = 1
+            group.display_object_json = {**group.display_object_json, 'body_markdown': 'New reply preflight'}
+        return result
+
+    bot.get_thread_by_id = update_during_lookup
+    runtime = _community_runtime(db, _publish_gateway(), bot=bot)
+    try:
+        result = await runtime.handle_inbound_comment(_fake_comment_event(), SimpleNamespace(
+            database=db, bot=bot, community_runtime=runtime,
+            bridge_policy_service=build_test_policy_service(db)))
+        assert result.status == 'processed'
+        assert thread.send.await_count == 1
+        assert 'New reply preflight' in thread.send.await_args.args[0]
+        with db.session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim))
+            assert claim.status == 'completed' and claim.applied_revision == 1
+    finally:
+        db.close()

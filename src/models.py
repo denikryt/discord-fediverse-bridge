@@ -949,6 +949,9 @@ class CommunityThreadGroup(Base):
     view_state: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'live'"))
     display_object_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     view_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Only a validated Note/Activity timestamp participates in source ordering.
+    # Legacy view_updated_at records the local commit/receipt time.
+    view_source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_view_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
@@ -1011,6 +1014,9 @@ class CommunityMessageGroup(Base):
     view_state: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'live'"))
     display_object_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     view_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Only a validated Note/Activity timestamp participates in source ordering.
+    # Legacy view_updated_at records the local commit/receipt time.
+    view_source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_view_activity_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # FK to another CommunityMessageGroup if this message is a reply.
     parent_message_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
