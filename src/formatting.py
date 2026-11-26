@@ -77,7 +77,9 @@ def _feed_markdown_link_end(body: str, start: int) -> int | None:
             if nesting == 0:
                 break
         position += 1
-    if nesting != 0 or position == start + 1 or body[position + 1:position + 2] != '(':
+    # Empty alt text is valid for an image, not for an ordinary masked link.
+    if (nesting != 0 or (position == start + 1 and not (start > 0 and body[start-1] == '!'))
+            or body[position + 1:position + 2] != '('):
         return None
     destination = position + 2
     if body.startswith('<http://', destination) or body.startswith('<https://', destination):

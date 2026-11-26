@@ -304,7 +304,9 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
         from ..db.repositories.discord_fanout_groups import RemoteCommunityGroupConflict
-        from ..bridge_lemmy_to_discord import _create_inbound_discord_thread, DiscordContentPreflightError
+        from ..bridge_lemmy_to_discord import (
+            _create_inbound_discord_thread, DiscordContentPreflightError, prepare_community_create,
+        )
 
         try:
             owner = self._inbound_owner(event)
@@ -340,7 +342,6 @@ class CommunityRuntime:
         if thread_group.inbound_create_snapshot_json is None:
             return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                                   "remote root lacks immutable first Create content")
-        from ..activitypub_models import ActivityPubObject
         bot = self.bot or runtime.bot
         delivered = 0
         for subscription in accepted:
@@ -353,9 +354,6 @@ class CommunityRuntime:
             if reservation.state != "reserved":
                 continue
             attempt = reservation.attempt_id
-            canonical_event = event.model_copy(update={
-                "object": ActivityPubObject.model_validate(reservation.display_object_json),
-            })
             # Fetching a channel is read-only; failure is provably before create_thread.
             try:
                 forum = await bot.fetch_forum_channel(channel)
@@ -375,32 +373,24 @@ class CommunityRuntime:
                 logger.exception("Remote post Discord bot not ready: group=%s target=%s",
                                  thread_group.id, channel)
                 continue
-            # A Group Delete/Update can commit during the preceding awaits.
-            # Revalidate the original reserved revision immediately before
-            # crossing the Discord Create boundary, without holding a lock
-            # over any network call.
-            pre_send = repository.confirm_remote_target_pre_send(
-                kind="post", group_id=thread_group.id, discord_channel_id=channel,
-                attempt_id=attempt)
-            if pre_send is None:
-                continue
-            # The writer has refreshed this same reserved attempt to the last
-            # committed live Group body. Never render the stale pre-GET copy.
+            # Media retrieval is part of read-only preflight. The same claim
+            # must be fenced against the latest live view after every await.
             try:
-                canonical_event = event.model_copy(update={
-                    "object": ActivityPubObject.model_validate(pre_send.display_object_json),
-                })
+                prepared = await prepare_community_create(repository, event=event,
+                    reservation=reservation, kind="post", group_id=thread_group.id,
+                    channel_id=channel, destination=forum)
             except (TypeError, ValueError):
-                # A malformed refreshed representation has never crossed the
-                # Discord network boundary; preserve a proven failed claim.
                 repository.mark_remote_target(kind="post", group_id=thread_group.id,
                     discord_channel_id=channel, attempt_id=attempt, status="failed")
-                logger.exception("Remote Group root view was invalid before POST: group=%s target=%s",
-                                 thread_group.id, channel)
+                logger.warning("Invalid remote Group root before POST: group=%s target=%s",
+                               thread_group.id, channel)
                 continue
+            if prepared is None:
+                continue
+            canonical_event, images = prepared
             try:
                 thread_id, starter_id = await _create_inbound_discord_thread(
-                    forum_channel=forum, event=canonical_event
+                    forum_channel=forum, event=canonical_event, images=images
                 )
                 repository.finish_remote_target(kind="post", group_id=thread_group.id,
                     discord_channel_id=channel, attempt_id=attempt,
@@ -447,7 +437,9 @@ class CommunityRuntime:
         """
         from ..activitypub_handlers import HandlerResult as _HandlerResult
         from ..db.repositories.discord_fanout_groups import RemoteCommunityGroupConflict
-        from ..bridge_lemmy_to_discord import _send_inbound_comment, DiscordContentPreflightError
+        from ..bridge_lemmy_to_discord import (
+            _send_inbound_comment, DiscordContentPreflightError, prepare_community_create,
+        )
 
         try:
             owner = self._inbound_owner(event)
@@ -513,7 +505,6 @@ class CommunityRuntime:
         if message_group.inbound_create_snapshot_json is None:
             return _HandlerResult("skipped", InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
                                   "remote reply lacks immutable first Create content")
-        from ..activitypub_models import ActivityPubObject
         bot = self.bot or runtime.bot
         delivered = 0
         allowed_channels = {s.discord_channel_id for s in accepted}
@@ -529,9 +520,6 @@ class CommunityRuntime:
             if reservation.state != "reserved":
                 continue
             attempt = reservation.attempt_id
-            canonical_event = event.model_copy(update={
-                "object": ActivityPubObject.model_validate(reservation.display_object_json),
-            })
             try:
                 thread = await bot.get_thread_by_id(delivery.discord_thread_id)
             except Exception:
@@ -551,28 +539,23 @@ class CommunityRuntime:
                 logger.exception("Remote reply unavailable before Discord REST: group=%s channel=%s",
                                  message_group.id, channel)
                 continue
-            # Discord thread resolution and reply-reference lookup can suspend
-            # this attempt while a Group Delete commits. Recheck before send.
-            pre_send = repository.confirm_remote_target_pre_send(
-                kind="comment", group_id=message_group.id, discord_channel_id=channel,
-                attempt_id=attempt)
-            if pre_send is None:
-                continue
-            # Update may have committed while resolving this reply's parent;
-            # its original claim must deliver the current body exactly once.
+            # A parent lookup or media download can race with a Group mutation.
             try:
-                canonical_event = event.model_copy(update={
-                    "object": ActivityPubObject.model_validate(pre_send.display_object_json),
-                })
+                prepared = await prepare_community_create(repository, event=event,
+                    reservation=reservation, kind="comment", group_id=message_group.id,
+                    channel_id=channel, destination=thread)
             except (TypeError, ValueError):
-                # The reference is already resolved, but no message was sent.
                 repository.mark_remote_target(kind="comment", group_id=message_group.id,
                     discord_channel_id=channel, attempt_id=attempt, status="failed")
-                logger.exception("Remote Group reply view was invalid before POST: group=%s target=%s",
-                                 message_group.id, channel)
+                logger.warning("Invalid remote Group reply before POST: group=%s target=%s",
+                               message_group.id, channel)
                 continue
+            if prepared is None:
+                continue
+            canonical_event, images = prepared
             try:
-                message = await _send_inbound_comment(thread=thread, event=canonical_event, reference=reference)
+                message = await _send_inbound_comment(thread=thread, event=canonical_event,
+                    reference=reference, images=images)
                 repository.finish_remote_target(kind="comment", group_id=message_group.id,
                     discord_channel_id=channel, attempt_id=attempt,
                     discord_thread_id=delivery.discord_thread_id, discord_object_id=message.id)

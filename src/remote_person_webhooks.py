@@ -6,13 +6,14 @@ avatars are presentation data, never an authorization identity.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 from .remote_person_feeds import REQUIRED_BOT_PERMISSIONS
 from .formatting import render_feed_discord_message, validate_feed_object_url
+from .federated_media import (can_attach_files, discord_files, download_images,
+    image_presentation, note_from_activity)
 
 
 class RemoteWebhookUnavailable(RuntimeError):
@@ -72,45 +73,24 @@ def _handle(post: object) -> str:
     return f'{_person_name(post)}@{actor.hostname}'[:80]
 
 
-def _attachment_urls(source: object) -> list[str]:
-    """Extract only safe external media links from the signed public Note."""
-    if not isinstance(source, dict):
-        return []
-    note = source.get('object')
-    if not isinstance(note, dict):
-        return []
-    attachments = note.get('attachment')
-    values = attachments if isinstance(attachments, list) else [attachments]
-    urls: list[str] = []
-    for value in values:
-        url = value.get('url') if isinstance(value, dict) else None
-        if isinstance(url, dict):
-            url = url.get('href') or url.get('id')
-        if isinstance(url, str) and _safe_image_url(url) and url not in urls:
-            urls.append(url)
-    return urls[:5]
-
-
-def remote_root_content(post: object) -> str:
-    """Render a webhook-owned root without repeating its sender identity in text."""
-    try:
-        source = json.loads(post.source_activity_json)
-    except (TypeError, ValueError):
-        source = {}
-    note = source.get('object') if isinstance(source, dict) else None
-    note = note if isinstance(note, dict) else {}
+def remote_root_presentation(post: object) -> tuple[str, tuple[str, ...]]:
+    """Use the saved Note to render its links and select its current images."""
+    note = note_from_activity(post.source_activity_json)
     warning = str(note.get('summary') or '').strip()
     lines: list[str] = []
     if warning:
         lines.append(f'Content warning: {warning}')
-    body = str(post.content_markdown or '').strip()
+    body, urls = image_presentation(str(post.content_markdown or '').strip(), note,
+        str(post.object_id), include_other_attachments=True)
     if body:
         lines.append(body)
-    lines.extend(_attachment_urls(source))
     footer = validate_feed_object_url(str(post.object_id))
-    return render_feed_discord_message(
-        header='', body='\n\n'.join(lines), footer=footer,
-    )
+    return render_feed_discord_message(header='', body='\n\n'.join(lines), footer=footer), urls
+
+
+def remote_root_content(post: object) -> str:
+    """Render a webhook root without duplicating image links or author identity."""
+    return remote_root_presentation(post)[0]
 
 
 class RemotePersonWebhookTransport:
@@ -164,12 +144,17 @@ class RemotePersonWebhookTransport:
     async def create(self, prepared: PreparedRemoteWebhook, post: object) -> int:
         """Post a root under the remote author's handle and avatar with wait=true."""
         import discord
-        message = await prepared.webhook.send(
-            content=remote_root_content(post),
-            username=_handle(post), avatar_url=_safe_image_url(post.remote_avatar_url),
-            allowed_mentions=discord.AllowedMentions.none(), wait=True,
-            suppress_embeds=True,
-        )
+        # The worker downloads files while still claimed, before authorizing
+        # the webhook POST. Never introduce another media GET after that fence.
+        images = getattr(post, 'images', ()) if can_attach_files(prepared.channel) else ()
+        with discord_files(images) as files:
+            options = {'files': files} if files else {}
+            message = await prepared.webhook.send(
+                content=remote_root_content(post),
+                username=_handle(post), avatar_url=_safe_image_url(post.remote_avatar_url),
+                allowed_mentions=discord.AllowedMentions.none(), wait=True,
+                suppress_embeds=True, **options,
+            )
         if message is None or getattr(message, 'id', None) is None:
             raise RuntimeError('wait=true webhook POST returned no Discord message ID')
         return int(message.id)
@@ -203,8 +188,13 @@ class RemotePersonWebhookTransport:
     async def edit(self, prepared: PreparedRemoteWebhook, message_id: int, post: object) -> None:
         """Mutate only a known message using its original webhook credentials."""
         import discord
-        await prepared.webhook.edit_message(message_id, content=remote_root_content(post),
-                                             allowed_mentions=discord.AllowedMentions.none())
+        content, urls = remote_root_presentation(post)
+        images = await download_images(urls) if can_attach_files(prepared.channel) else ()
+        # discord.py's webhook PATCH omits flags, preserving SUPPRESS_EMBEDS.
+        # An explicit replacement list removes old files on image-less edits.
+        with discord_files(images) as files:
+            await prepared.webhook.edit_message(message_id, content=content,
+                attachments=files, allowed_mentions=discord.AllowedMentions.none())
 
     async def delete(self, prepared: PreparedRemoteWebhook, message_id: int) -> None:
         """Delete the retained root using the same original Incoming webhook."""

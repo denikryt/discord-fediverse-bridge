@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..activitypub_models import ActivityPubEvent
+from ..federated_media import media_source_from_note
 from ..inbound_activity_outcomes import InboundActivityOutcome
 from ..models import (ActivityPubEventReceipt, BridgeActorFollow,
                       ChannelCommunitySubscription, CommunityThreadGroup,
@@ -408,6 +409,13 @@ class GroupViewMutationService:
                     updated = dict(prior)
                     updated['body_markdown'] = event.object.body_markdown
                     raw_object = event.source_activity_json.get('object')
+                    # Replace, never merge, image-bearing fields: an omitted
+                    # attachment on a full Note Update removes the prior image.
+                    updated['media_source'] = media_source_from_note(raw_object)
+                    # A link post's previous external image URL must not be
+                    # retained after the current Note removes that attachment.
+                    if event.object.kind == 'post' and isinstance(raw_object, dict):
+                        updated['url'] = event.object.url or event.object.ap_id
                     if (event.object.kind == 'post' and isinstance(raw_object, dict)
                             and isinstance(raw_object.get('name'), str)):
                         updated['title'] = event.object.title

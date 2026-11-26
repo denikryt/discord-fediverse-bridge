@@ -16,7 +16,8 @@ from sqlalchemy import or_, select
 
 from .models import RemotePersonPost, RemotePersonPostDelivery, utcnow
 from .remote_person_feeds import RemotePersonChannelService
-from .remote_person_webhooks import RemotePersonWebhookTransport, remote_root_content
+from .remote_person_webhooks import RemotePersonWebhookTransport, remote_root_presentation
+from .federated_media import DownloadedImage, can_attach_files, download_images
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class RootSnapshot:
     webhook_id: int | None
     claim_token: str | None
     attempt_count: int
+    images: tuple[DownloadedImage, ...] = ()
 
 
 def _snapshot(row: RemotePersonPostDelivery, post: RemotePersonPost) -> RootSnapshot:
@@ -297,7 +299,7 @@ class RemotePersonRootDeliveryWorker:
         try:
             # Validate the immutable author/identity budget before network
             # authorization so a local ValueError can never mean uncertain.
-            remote_root_content(claim)
+            _, urls = remote_root_presentation(claim)
         except ValueError as exc:
             self._render_failure(claim, str(exc))
             return
@@ -308,6 +310,11 @@ class RemotePersonRootDeliveryWorker:
         except Exception as exc:
             self._local_failure(claim, str(exc))
             return
+        # The canonical snapshot already pins a revision. If an Update arrives
+        # during this preflight, the retained worker applies the newer revision;
+        # a Delete or revoked assignment still fences the as-yet unsent POST.
+        images = await download_images(urls) if can_attach_files(getattr(prepared, 'channel', None)) else ()
+        claim = replace(claim, images=images)
         if not self._authorize_sending(claim, prepared.webhook_id):
             return
         try:

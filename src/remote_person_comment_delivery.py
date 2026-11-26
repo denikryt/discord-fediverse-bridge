@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from uuid import uuid4
 
@@ -18,6 +18,8 @@ from .models import (InboundConversationObject, MessageMapping, PublishedActivit
                      RemotePersonPostDelivery, utcnow)
 from .remote_person_feeds import RemotePersonChannelService
 from .formatting import feed_comment_content, has_feed_comment_identity
+from .federated_media import (DownloadedImage, can_attach_files, discord_files, download_images,
+    image_presentation, note_from_activity)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,16 @@ class CommentDispatch:
     actor_id: str
     parent_message_id: int | None
     revision: str
+    image_urls: tuple[str, ...] = ()
+    images: tuple[DownloadedImage, ...] = ()
+
+
+def _comment_presentation(canonical: object) -> tuple[str, tuple[str, ...]]:
+    """Read remote reply media from its saved Note; local mirrors stay text-only."""
+    body = getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''
+    if not isinstance(canonical, InboundConversationObject):
+        return body, ()
+    return image_presentation(body, note_from_activity(canonical.source_activity_json), canonical.object_id)
 
 
 class BotCommentTransport:
@@ -64,13 +76,18 @@ class BotCommentTransport:
                 channel_id=claim.thread_id,
                 fail_if_not_exists=True,
             )
-        message = await thread.send(
-            feed_comment_content(actor_name=claim.actor_name, actor_id=claim.actor_id,
-                                 object_id=claim.object_id, body=claim.body), **options,
-        )
+        images = claim.images if can_attach_files(thread) else ()
+        with discord_files(images) as files:
+            if files:
+                options['files'] = files
+            message = await thread.send(
+                feed_comment_content(actor_name=claim.actor_name, actor_id=claim.actor_id,
+                                     object_id=claim.object_id, body=claim.body), **options,
+            )
         return int(message.id)
 
-    async def edit(self, thread_id: int, message_id: int, content: str) -> None:
+    async def edit(self, thread_id: int, message_id: int, content: str,
+                   *, image_urls: tuple[str, ...] = ()) -> None:
         """Change only the bot's existing comment without creating a new message."""
         import discord
         thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
@@ -80,7 +97,12 @@ class BotCommentTransport:
         message = await thread.fetch_message(message_id)
         if message.author.id != self.bot.user.id:
             raise PermissionError('cannot mutate a message from another Discord author')
-        await message.edit(content=content, allowed_mentions=discord.AllowedMentions.none())
+        images = await download_images(image_urls) if can_attach_files(thread) else ()
+        # All copies here are bot-owned. Empty attachments removes an old
+        # remote image; the original user's Discord message is never edited.
+        with discord_files(images) as files:
+            await message.edit(content=content, suppress=True, attachments=files,
+                allowed_mentions=discord.AllowedMentions.none())
 
     async def delete(self, thread_id: int, message_id: int) -> None:
         """Delete only the original bot-owned comment, never a user's source."""
@@ -234,13 +256,14 @@ class RemotePersonCommentDeliveryWorker:
                 row.claim_token = uuid4().hex
                 row.destination_thread_id = copy.discord_thread_id
                 row.next_attempt_at = None
+                body, urls = _comment_presentation(canonical)
                 return CommentDispatch(
                     placement_id=row.id, claim_token=row.claim_token,
                     root_id=copy.id, guild_id=copy.discord_guild_id,
                     channel_id=copy.discord_channel_id, thread_id=copy.discord_thread_id,
                     root_actor_id=root.remote_actor_id,
                     object_id=canonical.object_id,
-                    body=(getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''),
+                    body=body, image_urls=urls,
                     actor_name=getattr(canonical, 'actor_name', None) or getattr(canonical, 'actor_username', None) or 'Remote user',
                     # Attribution belongs to this Note, not to its root Person.
                     actor_id=(canonical.actor_id if isinstance(canonical, InboundConversationObject)
@@ -258,7 +281,10 @@ class RemotePersonCommentDeliveryWorker:
             copy = session.get(RemotePersonPostDelivery, claim.root_id)
             if row is None or copy is None or row.claim_token != claim.claim_token or row.state != 'claimed':
                 return False
-            if (not self._policy_ok(claim.guild_id, claim.root_actor_id)
+            # A root Delete can arrive while its reply's image is downloading.
+            root = session.get(RemotePersonPost, copy.post_id)
+            if (root is None or root.deleted_at is not None
+                    or not self._policy_ok(claim.guild_id, claim.root_actor_id)
                     or not RemotePersonChannelService._active_owner_exists(
                         session, claim.root_actor_id, claim.guild_id, claim.channel_id)):
                 row.state = 'suppressed'
@@ -339,6 +365,9 @@ class RemotePersonCommentDeliveryWorker:
         except ValueError as exc:
             self._render_failure(claim, str(exc))
             return
+        # Download before the durable sending transition. A Delete received
+        # during this read-only operation can still suppress the claim.
+        claim = replace(claim, images=await download_images(claim.image_urls))
         if not self._authorize(claim):
             return
         try:
@@ -375,7 +404,7 @@ class RemotePersonCommentDeliveryWorker:
                 if row.last_applied_revision == desired:
                     continue
                 name = getattr(canonical, 'actor_name', None) or getattr(canonical, 'actor_username', None) or 'Remote user'
-                content = getattr(canonical, 'content_markdown', None) or getattr(canonical, 'body_markdown', None) or ''
+                content, urls = _comment_presentation(canonical)
                 # Edit the saved canonical author's message, not an arbitrary
                 # current Discord display name or the root Person's identity.
                 actor_id = (canonical.actor_id if isinstance(canonical, InboundConversationObject)
@@ -383,13 +412,14 @@ class RemotePersonCommentDeliveryWorker:
                 rendered = feed_comment_content(actor_name=name, actor_id=actor_id,
                                                 object_id=canonical.object_id, body=content)
                 pending.append((row.id, row.destination_thread_id, row.discord_message_id,
-                                desired, rendered))
-        for placement_id, thread_id, message_id, revision, content in pending[:40]:
+                                desired, rendered, urls))
+        for placement_id, thread_id, message_id, revision, content, urls in pending[:40]:
             try:
                 if revision == 'deleted':
                     await self.transport.delete(thread_id, message_id)
                 else:
-                    await self.transport.edit(thread_id, message_id, content)
+                    # An empty replacement list removes the old attachment.
+                    await self.transport.edit(thread_id, message_id, content, image_urls=urls)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

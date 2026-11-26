@@ -107,6 +107,21 @@ states: `uncertain` means the HTTP outcome cannot be proved and is not blindly
 resent. A Discord webhook root's original webhook identity is retained for
 subsequent edits/deletes; removing that webhook prevents those operations.
 
+Remote Community posts/replies and remote Person-feed roots/replies render
+raster images as Discord attachments. The bridge recognizes ActivityPub Image
+and image-typed attachments, Markdown image links, known raster URL suffixes
+and HTML `img` sources. It keeps the original source link, suppresses link
+previews and replaces its own attachments on Update; removal or Delete clears
+old files. Failed or disallowed downloads leave the text and source link.
+
+Downloads are HTTPS-only (port 443), use public DNS results at the connection
+boundary and revalidate each redirect. Supported files are PNG, JPEG, GIF and
+WebP, with matching MIME and raster format. Up to four unique images per
+message, 5 MiB and 25 million pixels per image, five seconds per download and
+three redirects are allowed. Files are uploaded from memory, not stored on
+local disk. Discord permissions still apply. Already delivered messages are
+not backfilled merely because the bridge has been upgraded.
+
 The bridge does not implement ActivityPub client-to-server, NodeInfo, generic
 boost handling, voting, likes, polls, reactions, or historical Discord channel
 backfill. Discord attachment federation is not a complete media pipeline.

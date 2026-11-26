@@ -7,6 +7,8 @@ export interface BridgeObject {
   ap_id: string;
   author_name: string;
   body_markdown: string | null;
+  /** Presentation-only source for HTML and structured AP image attachments. */
+  media_source?: Record<string, unknown>;
   kind: "post" | "comment";
   lemmy_id: number | null;
   parent_ap_id: string | null;

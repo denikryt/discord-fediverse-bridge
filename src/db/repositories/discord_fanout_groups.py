@@ -494,6 +494,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
 
     def confirm_remote_target_pre_send(
         self, *, kind: str, group_id: int, discord_channel_id: int, attempt_id: str,
+        prepared_revision: int | None = None,
     ) -> RemoteTargetReservation | None:
         """Refresh this attempt to the current live Group view before REST.
 
@@ -533,6 +534,12 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 claim.status = "failed"
                 claim.reconciliation_marker_version = None
                 return None
+            # Media downloads are still preflight I/O. If the view changed,
+            # refresh the same token without authorizing a POST with old files.
+            if prepared_revision is not None and group.view_revision != prepared_revision:
+                return RemoteTargetReservation(
+                    "refresh", attempt_id, group.view_revision, dict(group.display_object_json)
+                )
             # A newer live Update is not a reason to discard a valid target.
             # Persist exactly the content/revision that the caller will render.
             claim.reserved_view_revision = group.view_revision

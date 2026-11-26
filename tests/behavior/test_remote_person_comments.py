@@ -103,7 +103,7 @@ class RemotePersonComments(unittest.TestCase):
                 self.calls = []
                 self.edits = []
                 self.deletes = []
-            async def edit(self, thread_id, message_id, content):
+            async def edit(self, thread_id, message_id, content, *, image_urls=()):
                 self.edits.append((thread_id, message_id, content))
             async def delete(self, thread_id, message_id):
                 self.deletes.append((thread_id, message_id))
@@ -826,7 +826,7 @@ class RemotePersonComments(unittest.TestCase):
                 row.last_applied_revision = 'stale'
         worker, edge = self.worker()
         calls = []
-        async def edit(thread_id, message_id, content):
+        async def edit(thread_id, message_id, content, *, image_urls=()):
             """Forty older edits fail; the two youngest copies can be updated."""
             calls.append(message_id)
             if message_id <= 2000040:
@@ -878,7 +878,7 @@ class RemotePersonComments(unittest.TestCase):
         class UnknownMessage(Exception):
             """Discord 10008 identifies the removed original bot comment."""
             code = 10008
-        async def absent(thread_id, message_id, content):
+        async def absent(thread_id, message_id, content, *, image_urls=()):
             """Return a known absence instead of a transient transport failure."""
             edge.edits.append((thread_id, message_id, content))
             raise UnknownMessage('Unknown Message')

@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 import aiohttp
 import discord
 
-from .activitypub_models import ActivityPubEvent
+from .activitypub_models import ActivityPubEvent, ActivityPubObject
+from .federated_media import (DownloadedImage, can_attach_files, discord_files,
+    download_images, image_presentation, media_source_from_note)
 from .formatting import (
     render_remote_community_root,
     render_remote_community_comment,
@@ -107,6 +109,7 @@ def _build_post_event_from_ap_doc(
                 "parent_ap_id": None,
                 "title": doc.get("name") or "Untitled Post",
                 "body_markdown": body_markdown,
+                "media_source": media_source_from_note(doc),
                 "url": url,
                 "published_at": published_at_raw,
                 "author_name": author_name,
@@ -115,10 +118,43 @@ def _build_post_event_from_ap_doc(
     )
 
 
+def community_image_presentation(post: object) -> tuple[str, tuple[str, ...]]:
+    """Resolve current Community body/links from its immutable revision snapshot."""
+    return image_presentation(post.body_markdown, getattr(post, 'media_source', None),
+        post.ap_id, external_url=getattr(post, 'url', None) if getattr(post, 'kind', None) == 'post' else None)
+
+
+async def prepare_community_create(repository, *, event, reservation, kind, group_id,
+                                   channel_id, destination):
+    """Download before the final claim fence; refresh if a live Update races.
+
+    Repeated revisions cannot prevent text delivery: after two refreshes the
+    final current view is sent without files, never with stale attachments.
+    """
+    attempt = reservation.attempt_id
+    for index in range(3):
+        obj = ActivityPubObject.model_validate(reservation.display_object_json)
+        _, urls = community_image_presentation(obj)
+        # The last pass is a bounded text-only fallback under continual edits.
+        images = await download_images(urls) if index < 2 and can_attach_files(destination) else ()
+        confirmed = repository.confirm_remote_target_pre_send(kind=kind, group_id=group_id,
+            discord_channel_id=channel_id, attempt_id=attempt,
+            prepared_revision=reservation.view_revision if index < 2 else None)
+        if confirmed is None:
+            return None
+        if confirmed.state == 'refresh':
+            reservation = confirmed
+            continue
+        current = ActivityPubObject.model_validate(confirmed.display_object_json)
+        return event.model_copy(update={'object': current}), images
+    return None
+
+
 async def _create_inbound_discord_thread(
     *,
     forum_channel: discord.ForumChannel,
     event: ActivityPubEvent,
+    images: tuple[DownloadedImage, ...] = (),
 ) -> tuple[int, int]:
     """Create one Discord forum-thread for an inbound AP post.
 
@@ -127,18 +163,24 @@ async def _create_inbound_discord_thread(
     """
     post = event.object
     title = format_thread_title_for_discord(post.title or "Untitled Lemmy Post")
+    text, _ = community_image_presentation(post)
     try:
         body = render_remote_community_root(
             actor_name=post.author_name, actor_id=event.actor_id,
             object_id=post.ap_id, title=post.title,
-            body=post.body_markdown, external_url=post.url,
+            body=text, external_url=None,
         )
     except ValueError as exc:
         # Local layout validation is provably before create_thread. A timeout
         # on the actual Discord call is handled separately by the runtime.
         raise DiscordContentPreflightError(str(exc)) from exc
 
-    result = await forum_channel.create_thread(name=title, content=body, suppress_embeds=True)
+    # Normal inbound runtime supplies files before its durable POST fence.
+    # Do not add network work to legacy callers without that fence.
+    with discord_files(images if can_attach_files(forum_channel) else ()) as files:
+        options = {'files': files} if files else {}
+        result = await forum_channel.create_thread(name=title, content=body,
+            suppress_embeds=True, **options)
     thread = getattr(result, "thread", None)
     message = getattr(result, "message", None)
     if thread is None and isinstance(result, tuple):
@@ -170,6 +212,7 @@ async def _send_inbound_comment(
     thread: discord.Thread,
     event: ActivityPubEvent,
     reference: discord.MessageReference | None,
+    images: tuple[DownloadedImage, ...] = (),
 ) -> discord.Message:
     """Send one Discord message for an inbound AP comment.
 
@@ -178,14 +221,17 @@ async def _send_inbound_comment(
     The reference is already resolved by the caller via _resolve_inbound_reference.
     """
     comment = event.object
+    text, _ = community_image_presentation(comment)
     try:
         body = render_remote_community_comment(
             actor_name=comment.author_name, actor_id=event.actor_id,
-            object_id=comment.ap_id, body=comment.body_markdown,
+            object_id=comment.ap_id, body=text,
         )
     except ValueError as exc:
         raise DiscordContentPreflightError(str(exc)) from exc
-    message = await thread.send(body, reference=reference, suppress_embeds=True)
+    with discord_files(images if can_attach_files(thread) else ()) as files:
+        options = {'files': files} if files else {}
+        message = await thread.send(body, reference=reference, suppress_embeds=True, **options)
     logger.info(
         "Created Discord message %s from ActivityPub comment %s",
         message.id,

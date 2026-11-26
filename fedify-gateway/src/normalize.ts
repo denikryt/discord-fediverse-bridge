@@ -365,6 +365,7 @@ async function normalizePostActivity(
       ap_id: apId,
       author_name: await resolveAuthorName(activity),
       body_markdown: resolveMarkdownBody(object),
+      media_source: await typedMediaSource(object),
       kind: "post",
       lemmy_id: parseInboundPostNumericId(apId, activity.actorId?.href ?? ""),
       parent_ap_id: null,
@@ -396,7 +397,8 @@ async function normalizeNoteRootActivity(
     occurred_at: published,
     object: {
       ap_id: objectId, author_name: await resolveAuthorName(activity),
-      body_markdown: resolveMarkdownBody(object), kind: "post", lemmy_id: 0,
+      body_markdown: resolveMarkdownBody(object),
+      media_source: await typedMediaSource(object), kind: "post", lemmy_id: 0,
       parent_ap_id: null, post_ap_id: null, post_lemmy_id: null,
       published_at: published, title: resolveText(object.name),
       url: resolveObjectUrl(object) ?? objectId,
@@ -419,7 +421,8 @@ function normalizeNoteRootActivityFromJson(
     event_type: "post.created", occurred_at: published,
     object: {
       ap_id: objectId, author_name: lastPathSegment(owner),
-      body_markdown: resolveMarkdownBodyFromJson(object), kind: "post", lemmy_id: 0,
+      body_markdown: resolveMarkdownBodyFromJson(object),
+      media_source: mediaSourceFromJson(object), kind: "post", lemmy_id: 0,
       parent_ap_id: null, post_ap_id: null, post_lemmy_id: null,
       published_at: published, title: asString(object.name),
       url: asString(object.url) ?? objectId, attributed_to_actor_id: owner,
@@ -481,6 +484,7 @@ async function normalizeCommentActivity(
       ap_id: apId,
       author_name: await resolveAuthorName(activity),
       body_markdown: resolveMarkdownBody(object),
+      media_source: await typedMediaSource(object),
       kind: "comment",
       lemmy_id: parseLemmyNumericIdOrZero(apId, "comment"),
       parent_ap_id: replyContext.parentApId,
@@ -596,6 +600,7 @@ function normalizePostActivityFromJson(
       ap_id: apId,
       author_name: resolveAuthorNameFromJson(activity, object),
       body_markdown: resolveMarkdownBodyFromJson(object),
+      media_source: mediaSourceFromJson(object),
       kind: "post",
       lemmy_id: parseInboundPostNumericId(apId, asCanonicalActorId(activity.actor) ?? ""),
       parent_ap_id: null,
@@ -675,6 +680,7 @@ async function normalizeCommentActivityFromJson(
       ap_id: apId,
       author_name: resolveAuthorNameFromJson(activity, object),
       body_markdown: resolveMarkdownBodyFromJson(object),
+      media_source: mediaSourceFromJson(object),
       kind: "comment",
       lemmy_id: parseLemmyNumericIdOrZero(apId, "comment"),
       parent_ap_id: replyContext.parentApId,
@@ -735,6 +741,23 @@ async function resolveCommentCommunityActorIdFromJson(
     parentMapping.objectId,
   );
   return parentMapping.communityActorUrl;
+}
+
+/** Retain only image-bearing source fields for Python's shared media parser.
+ * No fetching here: the authenticated delivery worker owns the network limits.
+ */
+function mediaSourceFromJson(object: Record<string, unknown>): Record<string, unknown> | undefined {
+  const result: Record<string, unknown> = {};
+  if (object.attachment != null) result.attachment = object.attachment;
+  if (typeof object.content === "string" && /<img\b/i.test(object.content)) {
+    result.content = object.content;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+/** Serialize the already resolved typed object, not a second object fetch. */
+async function typedMediaSource(object: ActivityObject): Promise<Record<string, unknown> | undefined> {
+  return mediaSourceFromJson(await object.toJsonLd() as Record<string, unknown>);
 }
 
 function resolveMarkdownBodyFromJson(object: Record<string, unknown>): string | null {

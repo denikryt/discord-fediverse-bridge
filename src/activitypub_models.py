@@ -28,6 +28,8 @@ class ActivityPubObject(BaseModel):
     parent_ap_id: str | None = None
     title: str | None = None
     body_markdown: str | None = None
+    # Preserve only image-bearing source fields in existing JSON snapshots.
+    media_source: dict[str, Any] | None = None
     url: str | None = None
     published_at: datetime
     author_name: str

@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from sqlalchemy import and_, exists, or_, select
 
+from ..federated_media import can_attach_files, discord_files, download_images, image_presentation
 from ..formatting import (has_feed_comment_identity, render_remote_community_root,
                           render_remote_community_comment, format_thread_title_for_discord)
 from ..models import (ChannelCommunitySubscription, CommunityDiscordTargetClaim,
@@ -47,6 +48,7 @@ class GroupClaimSnapshot:
     operation: str
     thread_id: int | None = None
     message_id: int | None = None
+    media_source: dict | None = None
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -73,14 +75,22 @@ def _inbound_delivery(session, claim: CommunityDiscordTargetClaim):
     ))
 
 
+def _image_presentation(snapshot: GroupClaimSnapshot) -> tuple[str, tuple[str, ...]]:
+    """Deleted views never retain or retrieve the old image references."""
+    if snapshot.view_state == 'deleted':
+        return '*Deleted from Community*', ()
+    return image_presentation(snapshot.body, snapshot.media_source, snapshot.object_id,
+        external_url=snapshot.external_url if snapshot.kind == 'post' else None)
+
+
 def _render(snapshot: GroupClaimSnapshot) -> str:
     """Reuse the identity-safe Create renderer for retained Update/Delete."""
-    body = '*Deleted from Community*' if snapshot.view_state == 'deleted' else snapshot.body
+    body, _ = _image_presentation(snapshot)
     if snapshot.kind == 'post':
         return render_remote_community_root(actor_name=snapshot.author_name,
             actor_id=snapshot.actor_id, object_id=snapshot.object_id,
             title=snapshot.title if snapshot.view_state != 'deleted' else 'Deleted from Community',
-            body=body, external_url=snapshot.external_url if snapshot.view_state != 'deleted' else None)
+            body=body, external_url=None)
     return render_remote_community_comment(actor_name=snapshot.author_name,
         actor_id=snapshot.actor_id, object_id=snapshot.object_id, body=body)
 
@@ -182,8 +192,13 @@ class CommunityDiscordViewTransport:
         # All bridge-created Community surfaces suppress link previews at
         # Create. discord.py defaults suppress to False on edit, so keep the
         # flag explicitly set even when replacing the body with a tombstone.
-        await message.edit(content=_render(snapshot), suppress=True,
-                           allowed_mentions=discord.AllowedMentions.none())
+        _, urls = _image_presentation(snapshot)
+        images = await download_images(urls) if can_attach_files(thread) else ()
+        # Replacement list owns only this bot-authored remote copy. Empty
+        # removes the previous files, including on terminal Group tombstones.
+        with discord_files(images) as files:
+            await message.edit(content=_render(snapshot), suppress=True,
+                attachments=files, allowed_mentions=discord.AllowedMentions.none())
         # Only live root revisions own a forum title; replies and tombstones
         # retain the thread name. A failed rename leaves the same revision
         # due, so the worker retries both idempotent operations together.
@@ -360,7 +375,7 @@ class CommunityGroupViewDeliveryWorker:
                 object_id=group.ap_object_id, actor_id=group.source_owner_actor_id,
                 author_name=content.get('author_name') or 'remote',
                 title=content.get('title'), body=content.get('body_markdown'),
-                external_url=content.get('url'),
+                external_url=content.get('url'), media_source=content.get('media_source'),
                 view_state=group.view_state, view_revision=group.view_revision,
                 applied_revision=claim.applied_revision,
                 reserved_revision=claim.reserved_view_revision,
