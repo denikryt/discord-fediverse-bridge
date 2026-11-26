@@ -80,10 +80,12 @@ class _Message:
         self.content = content
         self.edited_at = edited_at
         self.edits = []
+        self.suppressed = True
 
-    async def edit(self, *, content):
+    async def edit(self, *, content, suppress=False):
         self.content = content
         self.edits.append(content)
+        self.suppressed = suppress
 
 
 class _Thread:
@@ -200,6 +202,7 @@ async def test_native_starter_update_preserves_object_title_and_mirror_header(tm
         assert wake.calls == 1
         assert edge.source.edits == []
         assert edge.mirror.content == '`Alice`\n\nHello again!'
+        assert edge.mirror.suppressed
         assert edge.tracked == [222]
         # A new revision of the same raw event is suppressed by the existing
         # durable mutation service's idempotency, not by publishing a new Note.

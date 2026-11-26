@@ -343,8 +343,8 @@ async def test_host_starter_edit_updates_subscriber_starter_surfaces(
         scenario.gateway.update_content.await_args.args[0].ap_object_id
         == "https://bridge.example/post/1"
     )
-    messages[2300].edit.assert_awaited_once_with(content="host edit")
-    messages[3400].edit.assert_awaited_once_with(content="host edit")
+    messages[2300].edit.assert_awaited_once_with(content="host edit", suppress=True)
+    messages[3400].edit.assert_awaited_once_with(content="host edit", suppress=True)
     messages[1200].edit.assert_not_awaited()
 
 
@@ -368,8 +368,8 @@ async def test_local_subscriber_starter_edit_updates_host_and_sibling_surfaces(
         scenario.gateway.update_content.await_args.args[0].ap_object_id
         == "https://bridge.example/post/1"
     )
-    messages[1200].edit.assert_awaited_once_with(content="subscriber edit")
-    messages[3400].edit.assert_awaited_once_with(content="subscriber edit")
+    messages[1200].edit.assert_awaited_once_with(content="subscriber edit", suppress=True)
+    messages[3400].edit.assert_awaited_once_with(content="subscriber edit", suppress=True)
     messages[2300].edit.assert_not_awaited()
 
 
@@ -388,8 +388,8 @@ async def test_host_and_local_subscriber_comment_edits_update_other_surfaces(
         new_content="host comment edit",
         runtime=_runtime_namespace(scenario, bot),
     )
-    messages[2400].edit.assert_awaited_once_with(content="host comment edit")
-    messages[3500].edit.assert_awaited_once_with(content="host comment edit")
+    messages[2400].edit.assert_awaited_once_with(content="host comment edit", suppress=True)
+    messages[3500].edit.assert_awaited_once_with(content="host comment edit", suppress=True)
     messages[1300].edit.assert_not_awaited()
 
     scenario.gateway.update_content.reset_mock()
@@ -406,8 +406,8 @@ async def test_host_and_local_subscriber_comment_edits_update_other_surfaces(
         scenario.gateway.update_content.await_args.args[0].ap_object_id
         == "https://bridge.example/comment/1"
     )
-    messages[1300].edit.assert_awaited_once_with(content="subscriber comment edit")
-    messages[3500].edit.assert_awaited_once_with(content="subscriber comment edit")
+    messages[1300].edit.assert_awaited_once_with(content="subscriber comment edit", suppress=True)
+    messages[3500].edit.assert_awaited_once_with(content="subscriber comment edit", suppress=True)
     messages[2400].edit.assert_not_awaited()
 
 
@@ -426,8 +426,8 @@ async def test_local_discord_deletes_mark_non_source_surfaces(
         runtime=_runtime_namespace(scenario, bot),
     )
     scenario.gateway.delete_content.assert_awaited_once()
-    messages[2300].edit.assert_awaited_once_with(content="*deleted by creator*")
-    messages[3400].edit.assert_awaited_once_with(content="*deleted by creator*")
+    messages[2300].edit.assert_awaited_once_with(content="*deleted by creator*", suppress=True)
+    messages[3400].edit.assert_awaited_once_with(content="*deleted by creator*", suppress=True)
     messages[1200].edit.assert_not_awaited()
 
     scenario.gateway.delete_content.reset_mock()
@@ -443,8 +443,8 @@ async def test_local_discord_deletes_mark_non_source_surfaces(
         scenario.gateway.delete_content.await_args.args[0].ap_object_id
         == "https://bridge.example/comment/1"
     )
-    messages[1300].edit.assert_awaited_once_with(content="*deleted by creator*")
-    messages[3500].edit.assert_awaited_once_with(content="*deleted by creator*")
+    messages[1300].edit.assert_awaited_once_with(content="*deleted by creator*", suppress=True)
+    messages[3500].edit.assert_awaited_once_with(content="*deleted by creator*", suppress=True)
     messages[2400].edit.assert_not_awaited()
 
 
@@ -511,7 +511,7 @@ async def test_partial_local_discord_failure_does_not_block_healthy_targets(
     scenario.gateway.update_content.assert_awaited_once()
     messages[1200].edit.assert_awaited_once()
     messages[3400].edit.assert_awaited_once_with(
-        content="subscriber edit with one broken target"
+        content="subscriber edit with one broken target", suppress=True
     )
 
 

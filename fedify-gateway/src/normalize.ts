@@ -236,9 +236,26 @@ export async function normalizeUpdateActivityFromJson(
   return null;
 }
 
+/** Normalize a nested Delete from the verified Announce serialization only.
+ * The outer signer is a routing hint; Python independently proves Group
+ * authority and ownership against the saved first Create. Do not inject a
+ * synthetic audience into the original, fingerprinted inner activity.
+ */
+export async function normalizeVerifiedAnnounceDeleteFromJson(
+  announce: Record<string, unknown>,
+  options: NormalizeOptions = {},
+): Promise<BridgeEvent | RemotePersonContentEvent | null> {
+  if (announce.type !== "Announce") return null;
+  const inner = asRecord(announce.object);
+  if (inner?.type !== "Delete") return null;
+  const groupScope = resolveCommunityActorIdForDelete({ audience: announce.actor });
+  return normalizeDeleteActivityFromJson(inner, options, groupScope);
+}
+
 export async function normalizeDeleteActivityFromJson(
   activity: unknown,
   options: NormalizeOptions = {},
+  verifiedAnnounceGroupScope: string | null = null,
 ): Promise<BridgeEvent | RemotePersonContentEvent | null> {
   // Handles the unwrapped Delete record extracted from Announce(Delete(...)).
   // Lemmy 0.19 sends object as a plain string URL (primary path).
@@ -257,7 +274,12 @@ export async function normalizeDeleteActivityFromJson(
     return null;
   }
 
-  const personalTarget = await loadPersonalConversationTarget(apId, options);
+  const innerGroup = resolveCommunityActorIdForDelete(activity);
+  // A verified Group wrapper is a distribution event, not a direct Person
+  // mutation. In the missing-audience case it must not be routed by an
+  // unrelated Personal Feed mapping of the same Note.
+  const personalTarget = verifiedAnnounceGroupScope == null
+    ? await loadPersonalConversationTarget(apId, options) : null;
   if (personalTarget != null) {
     const actorId = asCanonicalActorId(activity.actor);
     if (actorId == null) return null;
@@ -278,11 +300,12 @@ export async function normalizeDeleteActivityFromJson(
     };
   }
 
-  // community_actor_id lives directly on the Delete record's audience field —
-  // confirmed from real logs. object is a plain string so we can't read it from there.
-  // Fall back to cc[0] if audience is absent.
+  // Prefer explicit nested addressing. If it conflicts with the outer signer,
+  // leave it intact so the Group authorization boundary can reject it.
+  // NodeBB can omit inner addressing; the authenticated distributor then
+  // supplies the exact Group scope before the ordinary Person fallback.
   const communityActorUrl =
-    resolveCommunityActorIdForDelete(activity) ??
+    innerGroup ?? verifiedAnnounceGroupScope ??
     asString(activity.actor) ??
     "";
 

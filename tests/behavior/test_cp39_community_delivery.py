@@ -513,3 +513,213 @@ async def test_paginated_scan_reaches_late_due_copy_without_unbounded_writers(tm
             assert claim.applied_revision == 1
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_group_root_update_and_delete_keep_embeds_suppressed_and_sync_title(tmp_path: Path) -> None:
+    """Both retained forum roots converge to the new title and safe tombstone."""
+    db, repo, group_id = _setup(tmp_path)
+    try:
+        db.remote_subscriptions.create_subscription(discord_channel_id=20,
+            lemmy_community_actor_id=GROUP, lemmy_community_name='Group',
+            lemmy_community_id=None, status='accepted')
+        threads = []
+        for channel_id, thread_id in ((10, 201), (20, 202)):
+            r = repo.reserve_remote_target(kind='post', group_id=group_id, discord_channel_id=channel_id)
+            repo.finish_remote_target(kind='post', group_id=group_id, discord_channel_id=channel_id,
+                attempt_id=r.attempt_id, discord_thread_id=thread_id, discord_object_id=thread_id)
+            thread = _EditableThread(thread_id, channel_id, 9, 'Original\n\n'+NOTE)
+            threads.append(thread)
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=_FakeBot(threads), policy_service=_Policy())
+        with db.immediate_session() as session:
+            group = session.get(CommunityThreadGroup, group_id)
+            group.view_revision = 1
+            group.display_object_json = {**group.display_object_json, 'title': 'New topic', 'body_markdown': 'New body'}
+        assert await worker.drain_once() == 2
+        for thread in threads:
+            assert thread.name == 'New topic'
+            assert 'New body' in thread._starter.content
+            assert thread._starter.suppressed
+            assert thread._starter.content.splitlines()[-1] == NOTE
+        with db.immediate_session() as session:
+            group = session.get(CommunityThreadGroup, group_id)
+            group.view_revision = 2
+            group.view_state = 'deleted'
+        assert await worker.drain_once() == 2
+        for thread in threads:
+            assert 'Deleted from Community' in thread._starter.content
+            assert 'New body' not in thread._starter.content
+            assert thread._starter.suppressed
+            assert thread.name == 'New topic'  # Keep the existing thread lifecycle on Delete.
+            assert thread.renames == ['New topic']
+        with db.session() as session:
+            assert [c.applied_revision for c in session.scalars(select(CommunityDiscordTargetClaim))] == [2, 2]
+    finally:
+        db.close()
+
+
+class _EditableMessage:
+    """Model Discord's content and suppress-embeds flag as separate state."""
+
+    def __init__(self, message_id, thread_id, bot_id, content):
+        """Create a retained, initially suppressed bot message."""
+        self.id = message_id
+        self.channel = SimpleNamespace(id=thread_id)
+        self.author = SimpleNamespace(id=bot_id)
+        self.content = content
+        self.suppressed = True
+
+    async def edit(self, *, content, suppress=False, **_kwargs):
+        """Simulate discord.py's default, which clears suppression on edit."""
+        self.content = content
+        self.suppressed = suppress
+
+
+class _EditableThread(_FakeThread):
+    """Model independent message and thread PATCH operations by exact ID."""
+
+    def __init__(self, thread_id, parent_id, bot_id, content):
+        """Expose the saved forum starter and distinct replies."""
+        super().__init__(thread_id, parent_id, bot_id, content)
+        self.name = 'Topic'
+        self.renames = []
+        self.fail_rename = False
+        self._starter = _EditableMessage(thread_id, thread_id, bot_id, content)
+        self.messages = {thread_id: self._starter}
+
+    async def fetch_message(self, message_id):
+        """Require the exact stored Discord ID, not a thread-level guess."""
+        return self.messages[message_id]
+
+    async def edit(self, *, name):
+        """Record only completed thread-name updates."""
+        if self.fail_rename:
+            raise RuntimeError('Discord thread name edit failed')
+        self.name = name
+        self.renames.append(name)
+
+
+@pytest.mark.asyncio
+async def test_group_root_title_failure_leaves_revision_due_and_comment_never_renames(tmp_path: Path) -> None:
+    """A partial root edit is retryable, while a reply cannot rename its parent."""
+    db, repo, group_id = _setup(tmp_path)
+    try:
+        r = repo.reserve_remote_target(kind='post', group_id=group_id, discord_channel_id=10)
+        repo.finish_remote_target(kind='post', group_id=group_id, discord_channel_id=10,
+            attempt_id=r.attempt_id, discord_thread_id=201, discord_object_id=201)
+        thread = _EditableThread(201, 10, 9, 'Original\n\n'+NOTE)
+        transport = CommunityDiscordViewTransport(_FakeBot([thread]))
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=object(), policy_service=_Policy(), transport=transport)
+        with db.immediate_session() as session:
+            group = session.get(CommunityThreadGroup, group_id)
+            group.view_revision = 1
+            group.display_object_json = {**group.display_object_json, 'title': 'X'*120}
+        thread.fail_rename = True
+        assert await worker.drain_once() == 1
+        with db.immediate_session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim))
+            assert claim.applied_revision == 0 and claim.next_attempt_at is not None
+            claim.next_attempt_at = None
+        thread.fail_rename = False
+        assert await worker.drain_once() == 1
+        assert thread.name == 'X'*99+'…'
+        with db.session() as session:
+            assert session.scalar(select(CommunityDiscordTargetClaim)).applied_revision == 1
+        thread.messages[301] = _EditableMessage(301, 201, 9, 'Reply')
+        await transport.edit(replace(_snapshot(kind='comment', thread_id=201), message_id=301, title='Not a topic'))
+        assert thread.renames == ['X'*99+'…']
+        assert thread.messages[301].suppressed
+        # A cache that has not seen the previous PATCH can still report the
+        # old title. Restoring that title must not skip the Discord operation.
+        thread.name = 'Topic'
+        with db.immediate_session() as session:
+            group = session.get(CommunityThreadGroup, group_id)
+            group.view_revision = 2
+            group.display_object_json = {**group.display_object_json, 'title': 'Topic'}
+        assert await worker.drain_once() == 1
+        assert thread.renames == ['X'*99+'…', 'Topic']
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_group_comment_delete_without_inner_audience_updates_both_saved_copies(tmp_path: Path) -> None:
+    """NodeBB /post/ reply deletion uses the proven Group and exact two Discord IDs."""
+    from src.activitypub_models import ActivityPubEvent
+    from src.community_sync.edit_delete import canonicalize_remote_delete_kind
+    from src.community_sync.group_view_mutations import GroupViewMutationService
+    from src.models import BridgeActorFollow, CommunityMessageGroup
+
+    db, repo, group_id = _setup(tmp_path)
+    comment_id = 'https://nodebb.example/post/43'
+    try:
+        db.remote_subscriptions.create_subscription(discord_channel_id=20,
+            lemmy_community_actor_id=GROUP, lemmy_community_name='Group',
+            lemmy_community_id=None, status='accepted')
+        with db.session() as session:
+            session.add(BridgeActorFollow(community_actor_id=GROUP,
+                follow_activity_id=GROUP+'/follow', community_inbox_url=GROUP+'/inbox',
+                remote_software_profile='nodebb', status='accepted', follow_dispatch_state='sent'))
+        reply = repo.get_or_create_remote_message_group(community_actor_id=GROUP, ap_object_id=comment_id,
+            source_owner_actor_id=OWNER, ap_activity_id=comment_id+'/create',
+            thread_group_id=group_id, parent_message_group_id=None,
+            first_object_json={'ap_id': comment_id, 'kind': 'comment', 'body_markdown': 'Reply',
+                'author_name': 'bob', 'published_at': '2026-11-18T12:00:00Z'})
+        threads = []
+        for channel_id, thread_id, message_id in ((10, 201, 301), (20, 202, 302)):
+            for kind, gid, mid in (('post', group_id, thread_id), ('comment', reply.id, message_id)):
+                r = repo.reserve_remote_target(kind=kind, group_id=gid, discord_channel_id=channel_id)
+                repo.finish_remote_target(kind=kind, group_id=gid, discord_channel_id=channel_id,
+                    attempt_id=r.attempt_id, discord_thread_id=thread_id, discord_object_id=mid)
+            thread = _EditableThread(thread_id, channel_id, 9, 'Root content')
+            thread.messages[message_id] = _EditableMessage(message_id, thread_id, 9, 'Old reply')
+            threads.append(thread)
+        inner = {'type': 'Delete', 'actor': OWNER, 'id': comment_id+'/delete', 'object': comment_id}
+        wire = GROUP+'/announce/delete-43'
+        event = ActivityPubEvent.model_validate({'event_type': 'post.deleted', 'delivery_id': wire,
+            'source_announce_id': wire, 'source_activity_id': inner['id'], 'source_activity_json': inner,
+            'community_actor_id': GROUP, 'actor_id': OWNER, 'verified_sender_actor_id': GROUP,
+            'occurred_at': '2026-11-18T13:00:00Z', 'object': {'ap_id': comment_id, 'kind': 'post',
+                'lemmy_id': 43, 'author_name': '', 'published_at': '2026-11-18T13:00:00Z'}})
+        event = canonicalize_remote_delete_kind(db, event)
+        assert event.event_type == 'comment.deleted'
+
+        async def verified_actor(_group):
+            """Return the same Group/inbox that the accepted Follow stores."""
+            return {'type': 'Group', 'id': GROUP, 'inbox': GROUP+'/inbox'}
+
+        service = GroupViewMutationService(db, _Policy(), actor_reader=verified_actor)
+        assert (await service.apply(event)).revision == 1
+        assert (await service.apply(event)).status == 'duplicate'
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=_FakeBot(threads), policy_service=_Policy())
+        assert await worker.drain_once() == 2
+        assert await worker.drain_once() == 0
+        for thread, mid in zip(threads, (301, 302)):
+            assert thread._starter.content == 'Root content'
+            assert thread.name == 'Topic' and thread.renames == []
+            assert '*Deleted from Community*' in thread.messages[mid].content
+            assert 'Old reply' not in thread.messages[mid].content and thread.messages[mid].suppressed
+        with db.session() as session:
+            assert session.get(CommunityMessageGroup, reply.id).view_state == 'deleted'
+            assert session.get(CommunityThreadGroup, group_id).view_state == 'live'
+            claims = list(session.scalars(select(CommunityDiscordTargetClaim)))
+            assert [c.applied_revision for c in claims if c.kind == 'comment'] == [1, 1]
+            assert [c.applied_revision for c in claims if c.kind == 'post'] == [0, 0]
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_community_edits_and_tombstones_keep_link_previews_suppressed() -> None:
+    """Legacy/local Community helpers cannot restore an old embed on a bot copy."""
+    from src.content_sync.edit_delete import edit_discord_message, mark_discord_message_deleted
+
+    thread = _EditableThread(201, 10, 9, '`bob`\n\nOriginal')
+    bot = _FakeBot([thread])
+    await edit_discord_message(bot=bot, discord_thread_id=201, discord_message_id=201,
+        new_content='Updated', preserve_header=True)
+    assert thread._starter.content == '`bob`\n\nUpdated'
+    assert thread._starter.suppressed
+    await mark_discord_message_deleted(bot=bot, discord_thread_id=201, discord_message_id=201)
+    assert thread._starter.content == '*deleted by creator*'
+    assert thread._starter.suppressed

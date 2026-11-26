@@ -339,3 +339,44 @@ async def test_source_clock_survives_timestampless_update_and_legacy_receive_tim
         assert after_legacy.revision == 4
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_group_announced_delete_without_inner_audience_targets_saved_comment(tmp_path: Path) -> None:
+    """An outer Group's authenticated scope can delete its known /post/ reply only."""
+    from src.community_sync.edit_delete import canonicalize_remote_delete_kind
+    from src.models import CommunityMessageGroup
+
+    db, service = _setup(tmp_path / 'wrapped-delete.db')
+    comment_id = 'https://nodebb.example/post/80'
+    try:
+        root = db.discord_fanout_groups.get_thread_group_by_ap_object(NOTE, community_actor_id=GROUP)
+        reply = db.discord_fanout_groups.get_or_create_remote_message_group(
+            community_actor_id=GROUP, ap_object_id=comment_id, source_owner_actor_id=OWNER,
+            ap_activity_id=comment_id+'/create', thread_group_id=root.id, parent_message_group_id=None,
+            first_object_json={'ap_id': comment_id, 'kind': 'comment', 'body_markdown': 'Reply',
+                               'author_name': 'alice', 'published_at': '2026-11-18T12:00:00Z'},
+        )
+        inner = {'type': 'Delete', 'id': comment_id+'/delete', 'actor': OWNER, 'object': comment_id}
+        outer = GROUP+'/announce/delete-80'
+        event = ActivityPubEvent.model_validate({
+            'event_type': 'post.deleted', 'delivery_id': outer, 'source_announce_id': outer,
+            'community_actor_id': GROUP, 'actor_id': OWNER, 'verified_sender_actor_id': GROUP,
+            'source_activity_id': inner['id'], 'source_activity_json': inner,
+            'occurred_at': '2026-11-18T12:00:00Z',
+            'object': {'ap_id': comment_id, 'kind': 'post', 'lemmy_id': 80,
+                       'published_at': '2026-11-18T12:00:00Z', 'author_name': ''},
+        })
+        event = canonicalize_remote_delete_kind(db, event)
+        assert event.event_type == 'comment.deleted'
+        assert service.recognizes(event, db)
+        with pytest.raises(GroupMutationDenied):
+            await service.apply(event.model_copy(update={'verified_sender_actor_id': OWNER}))
+        assert (await service.apply(event)).revision == 1
+        assert (await service.apply(event)).status == 'duplicate'
+        with db.session() as session:
+            saved = session.get(CommunityMessageGroup, reply.id)
+            assert saved.view_state == 'deleted' and saved.view_revision == 1
+            assert session.get(CommunityThreadGroup, root.id).view_state == 'live'
+    finally:
+        db.close()

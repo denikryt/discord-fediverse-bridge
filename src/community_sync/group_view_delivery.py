@@ -17,7 +17,7 @@ from uuid import uuid4
 from sqlalchemy import and_, exists, or_, select
 
 from ..formatting import (has_feed_comment_identity, render_remote_community_root,
-                          render_remote_community_comment)
+                          render_remote_community_comment, format_thread_title_for_discord)
 from ..models import (ChannelCommunitySubscription, CommunityDiscordTargetClaim,
                       CommunityMessageGroup, CommunityMessageGroupDelivery,
                       CommunityThreadGroup, CommunityThreadGroupDelivery, utcnow)
@@ -179,7 +179,20 @@ class CommunityDiscordViewTransport:
         if getattr(getattr(message, 'author', None), 'id', None) != self._bot_id():
             raise PermissionError('Community message was not created by this bot')
         import discord
-        await message.edit(content=_render(snapshot), allowed_mentions=discord.AllowedMentions.none())
+        # All bridge-created Community surfaces suppress link previews at
+        # Create. discord.py defaults suppress to False on edit, so keep the
+        # flag explicitly set even when replacing the body with a tombstone.
+        await message.edit(content=_render(snapshot), suppress=True,
+                           allowed_mentions=discord.AllowedMentions.none())
+        # Only live root revisions own a forum title; replies and tombstones
+        # retain the thread name. A failed rename leaves the same revision
+        # due, so the worker retries both idempotent operations together.
+        if snapshot.kind == 'post' and snapshot.view_state == 'live':
+            title = format_thread_title_for_discord(snapshot.title or 'Untitled Lemmy Post')
+            # get_thread_by_id can return a cached Thread. Do not treat its
+            # name as proof that the previous PATCH has reached this cache:
+            # a later revision may restore precisely that stale cached name.
+            await thread.edit(name=title)
 
 
 class CommunityGroupViewDeliveryWorker:

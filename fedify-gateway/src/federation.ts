@@ -28,6 +28,7 @@ import {
   normalizeCreateActivityFromJson,
   normalizeUpdateActivityFromJson,
   normalizeDeleteActivityFromJson,
+  normalizeVerifiedAnnounceDeleteFromJson,
   resolveCommunityActorIdForDelete,
 } from "./normalize.js";
 import { getPythonBridgeClient } from "./python-bridge-client.js";
@@ -372,7 +373,9 @@ export function createGatewayFederation(
 
         const deleteRecord = extractDeleteRecord(announceEnvelope.rawRecord);
         if (deleteRecord != null) {
-          const event = await normalizeDeleteActivityFromJson(deleteRecord, { pythonBridgeClient: getPythonBridgeClient(config) });
+          const event = await normalizeVerifiedAnnounceDeleteFromJson(
+            announceEnvelope.rawRecord, { pythonBridgeClient: getPythonBridgeClient(config) },
+          );
           if (event == null) {
             logDebug(isDebug, "normalizeDeleteActivityFromJson returned null");
             return;

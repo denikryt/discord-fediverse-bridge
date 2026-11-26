@@ -322,7 +322,9 @@ class DiscordFanout:
                 edited = apply_edit_to_discord_message(
                     message.content, new_content, fallback_header=fallback_author,
                 )
-                await message.edit(content=edited)
+                # Keep the suppression flag set by mirror Create; an edit
+                # must not expose stale URL previews in the Discord copy.
+                await message.edit(content=edited, suppress=True)
                 self.mutation_tracker.track_message_edit(delivery.discord_starter_message_id)
             except Exception:
                 logger.exception('Failed Community mirror starter edit %s',
@@ -366,7 +368,8 @@ class DiscordFanout:
                     new_content,
                     fallback_header=author_display_name,
                 )
-                await message.edit(content=updated)
+                # Mirror sends suppress embeds; discord.py edits must retain it.
+                await message.edit(content=updated, suppress=True)
                 # Record only successful mutations so raw Discord events can suppress echoes.
                 self.mutation_tracker.track_message_edit(delivery.discord_message_id)
                 logger.info(
