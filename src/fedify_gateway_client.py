@@ -116,6 +116,25 @@ class PublishLocalCommunityContentResult:
     activity_json: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedPersonFollow:
+    """An immutable per-user signed Follow tuple committed before network I/O."""
+
+    actor_username: str
+    actor_url: str
+    remote_actor_id: str
+    remote_inbox_url: str
+    follow_activity_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedRemotePerson:
+    """Verified canonical Person actor and inbox from Fedify actor dereference."""
+
+    actor_id: str
+    inbox_url: str
+
+
 @dataclass(slots=True)
 class RenderPersonalFeedRequest:
     """Carry one deterministic render-only personal-feed publication request."""
@@ -129,6 +148,7 @@ class RenderPersonalFeedRequest:
     kind: str = "post"
     in_reply_to_object_id: str | None = None
     conversation_root_object_id: str | None = None
+    direct_person_actor_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -174,6 +194,7 @@ class UpdateContentRequest:
     render_only: bool = False
     software_profile: str | None = None
     conversation_root_object_id: str | None = None
+    direct_person_actor_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -192,6 +213,7 @@ class DeleteContentRequest:
     render_only: bool = False
     software_profile: str | None = None
     conversation_root_object_id: str | None = None
+    direct_person_actor_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -351,6 +373,61 @@ class FedifyGatewayClient:
             follow_activity_id=payload["followActivityId"],
         )
 
+    async def send_prepared_person_undo(self, prepared: PreparedPersonFollow) -> None:
+        """Cancel exactly one committed user Follow via the original typed key."""
+        response = await self._client.post(
+            "/send-prepared-person-undo",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": prepared.actor_username,
+                "actorUrl": prepared.actor_url,
+                "remoteActorId": prepared.remote_actor_id,
+                "remoteInboxUrl": prepared.remote_inbox_url,
+                "followActivityId": prepared.follow_activity_id,
+            },
+        )
+        if response.status_code == 422:
+            try:
+                failure = response.json()
+            except ValueError:
+                failure = None
+            if isinstance(failure, dict) and failure.get("code") == "follow_sender_unavailable" and failure.get("dispatched") is False:
+                raise FollowNotDispatchedError("User Person Undo signer unavailable")
+        response.raise_for_status()
+
+    async def send_prepared_person_follow(self, prepared: PreparedPersonFollow) -> None:
+        """Dispatch a single saved Follow with the sender's typed Person key."""
+        response = await self._client.post(
+            "/send-prepared-person-follow",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={
+                "actorUsername": prepared.actor_username,
+                "actorUrl": prepared.actor_url,
+                "remoteActorId": prepared.remote_actor_id,
+                "remoteInboxUrl": prepared.remote_inbox_url,
+                "followActivityId": prepared.follow_activity_id,
+            },
+        )
+        if response.status_code == 422:
+            try:
+                failure = response.json()
+            except ValueError:
+                failure = None
+            if isinstance(failure, dict) and failure.get("code") == "follow_sender_unavailable" and failure.get("dispatched") is False:
+                raise FollowNotDispatchedError("User Person signing key unavailable")
+        response.raise_for_status()
+
+    async def resolve_remote_person(self, actor_id: str) -> ResolvedRemotePerson:
+        """Resolve the exact remote Person identity and inbox through Fedify."""
+        response = await self._client.post(
+            "/resolve-remote-person",
+            headers={"Authorization": f"Bearer {self._shared_secret}"},
+            json={"actorId": actor_id},
+        )
+        response.raise_for_status()
+        data = response.json()
+        return ResolvedRemotePerson(actor_id=data["actorId"], inbox_url=data["inboxUrl"])
+
     async def render_personal_feed(
         self, request: RenderPersonalFeedRequest
     ) -> RenderPersonalFeedResult:
@@ -368,6 +445,7 @@ class FedifyGatewayClient:
                 "kind": request.kind,
                 "inReplyToObjectId": request.in_reply_to_object_id,
                 "conversationRootObjectId": request.conversation_root_object_id,
+                "directPersonActorIds": request.direct_person_actor_ids,
             },
         )
         response.raise_for_status()
@@ -534,6 +612,7 @@ class FedifyGatewayClient:
                 "renderOnly": request.render_only,
                 "softwareProfile": request.software_profile,
                 "conversationRootObjectId": request.conversation_root_object_id,
+                "directPersonActorIds": request.direct_person_actor_ids,
             },
         )
         response.raise_for_status()
@@ -565,6 +644,7 @@ class FedifyGatewayClient:
                 "renderOnly": request.render_only,
                 "softwareProfile": request.software_profile,
                 "conversationRootObjectId": request.conversation_root_object_id,
+                "directPersonActorIds": request.direct_person_actor_ids,
             },
         )
         response.raise_for_status()

@@ -287,6 +287,7 @@ class UserActorDeliveryService:
                                 render_only=bool(request.get("directGroupRecipients")),
                                 software_profile=request.get("softwareProfile"),
                                 conversation_root_object_id=request.get("conversationRootObjectId"),
+                                direct_person_actor_ids=[item["actorId"] for item in request.get("directPersonRecipients", [])],
                             )
                         )
                     else:
@@ -311,11 +312,14 @@ class UserActorDeliveryService:
                                 render_only=bool(request.get("directGroupRecipients")),
                                 software_profile=request.get("softwareProfile"),
                                 conversation_root_object_id=request.get("conversationRootObjectId"),
+                                direct_person_actor_ids=[item["actorId"] for item in request.get("directPersonRecipients", [])],
                             )
                         )
                     canonical = result.activity_json
                     if request.get("directGroupRecipients") is not None:
                         self._validate_direct_mutation_render(claim, result)
+                    if request.get("directPersonRecipients"):
+                        self._validate_direct_person_mutation_render(claim, result)
                     if not self.database.content_mutations.record_canonical_result(
                         claim.mutation_id, claim.claim_token, canonical
                     ):
@@ -385,20 +389,47 @@ class UserActorDeliveryService:
             raise ValueError("rendered direct Update changed original Group owner/type/parent")
 
     @staticmethod
+    def _validate_direct_person_mutation_render(claim, result) -> None:
+        """Check remote Person audience and immutable Note ancestry before commit."""
+        request = claim.request
+        recipients = request["directPersonRecipients"]
+        actors = [item["actorId"] for item in recipients]
+        activity = result.activity_json
+        expected_cc = [claim.actor_url, f"{claim.actor_url}/followers", *actors]
+        if (result.activity_id != claim.activity_id
+            or result.object_id != request["apObjectId"]
+            or not isinstance(activity, dict)
+            or activity.get("actor") != claim.actor_url
+            or activity.get("id") != claim.activity_id
+            or activity.get("cc") != expected_cc
+            or activity.get("type") != ("Delete" if claim.kind == "content_delete" else "Update")):
+            raise ValueError("rendered mutation changed immutable direct Person audience")
+        obj = activity.get("object")
+        if claim.kind == "content_delete":
+            if obj != request["apObjectId"]:
+                raise ValueError("rendered Delete targets wrong Person Note")
+        elif (not isinstance(obj, dict) or obj.get("id") != request["apObjectId"]
+              or obj.get("attributedTo") != claim.actor_url
+              or obj.get("type") != "Note"
+              or obj.get("cc") != [f"{claim.actor_url}/followers", *actors]
+              or obj.get("inReplyTo") != request.get("inReplyToObjectId")):
+            raise ValueError("rendered Update changed Person Note owner/parent/audience")
+
+    @staticmethod
     def _validate_mutation_request(claim) -> None:
         """Reject malformed local reservations before any gateway side effect."""
         request = claim.request
         if request.get("apObjectId") is None or request.get("actorUsername") is None:
             raise ValueError("mutation reservation is missing object ownership data")
         context = request.get("publicationContext", "community")
-        if context not in {"community", "personal_feed"}:
+        if context not in {"community", "personal_feed", "remote_person_feed"}:
             raise ValueError(
                 "mutation reservation has an unsupported publication context"
             )
         if context == "community" and not request.get("communityActorUrl"):
             raise ValueError("community mutation is missing community ownership")
-        if context == "personal_feed" and request.get("communityActorUrl") is not None:
-            raise ValueError("personal-feed mutation cannot carry community ownership")
+        if context in {"personal_feed", "remote_person_feed"} and request.get("communityActorUrl") is not None:
+            raise ValueError("Person mutation cannot carry community ownership")
         if claim.kind == "content_update" and request.get("kind") not in {
             "post",
             "comment",
@@ -412,6 +443,14 @@ class UserActorDeliveryService:
             raise ValueError(
                 "mutation activity identity does not match its reservation"
             )
+        if "directPersonRecipients" in request:
+            recipients = request["directPersonRecipients"]
+            if (context not in {"personal_feed", "remote_person_feed"}
+                or not isinstance(recipients, list)
+                or any(not isinstance(item, dict) or set(item) != {"actorId", "inboxUrl"}
+                       for item in recipients)
+                or request.get("targetInboxUrls") is not None):
+                raise ValueError("direct Person mutation has inconsistent original recipient")
         if "directGroupRecipients" in request:
             recipients = request["directGroupRecipients"]
             if (not isinstance(recipients, list) or len(recipients) != 1
@@ -442,6 +481,11 @@ class UserActorDeliveryService:
                 # revoked or policy-denied Group grant when the Create is
                 # addressed to that Group. Check every original Group actor
                 # and inbox independently, not just the target endpoint.
+                person_policy_allowed = all(
+                    self.policy_service.federation_decision(person_actor).allowed
+                    and self.policy_service.federation_decision(person_inbox).allowed
+                    for person_actor, person_inbox in claim.direct_person_routes
+                )
                 group_policy_allowed = all(
                     self.policy_service.federation_decision(group_actor).allowed
                     and self.policy_service.federation_decision(group_inbox).allowed
@@ -458,7 +502,7 @@ class UserActorDeliveryService:
                     claim.delivery_id, claim.claim_token, str(exc)
                 )
                 continue
-            if not endpoint_allowed or not represented_actor_allowed or not group_policy_allowed:
+            if not endpoint_allowed or not represented_actor_allowed or not group_policy_allowed or not person_policy_allowed:
                 self.database.user_actor_deliveries.mark_ineligible(
                     claim.delivery_id,
                     claim.claim_token,
@@ -491,7 +535,7 @@ class UserActorDeliveryService:
                 by_id = {outcome.delivery_id: outcome for outcome in outcomes}
                 for claim in group:
                     outcome = by_id.get(claim.delivery_id)
-                    if claim.direct_group_routes and not (outcome and outcome.ok):
+                    if (claim.direct_group_routes or claim.direct_person_routes) and not (outcome and outcome.ok):
                         # A negative/absent gateway outcome can follow a real
                         # successful send. Never auto-retry this direct Create.
                         self.database.user_actor_deliveries.record_unresolved(
@@ -512,7 +556,7 @@ class UserActorDeliveryService:
                     )
             except Exception as exc:
                 for claim in group:
-                    if claim.direct_group_routes:
+                    if claim.direct_group_routes or claim.direct_person_routes:
                         self.database.user_actor_deliveries.record_unresolved(
                             claim.delivery_id, claim.claim_token, str(exc)
                         )

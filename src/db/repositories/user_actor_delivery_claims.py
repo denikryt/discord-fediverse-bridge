@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 from typing import Callable
 
 from sqlalchemy import and_, case, func, or_, select
@@ -84,15 +85,16 @@ class UserActorDeliveryClaimRepository:
                 # A revoked Group cannot be revived by an unrelated follower
                 # whose shared endpoint happens to be identical.
                 direct_routes = self._eligible_direct_routes(session, source)
+                person_routes = self._eligible_direct_person_routes(session, source)
                 # A previously claimed direct send remains ambiguous even if
                 # its Follow was revoked while the worker was unavailable.
                 # Classify the old attempt before checking current eligibility.
-                if delivery.status == "sending" and direct_routes is not None:
+                if delivery.status == "sending" and (direct_routes is not None or person_routes):
                     self._mark_terminal_without_claim(delivery, status="unknown")
-                    delivery.last_error = "direct Group send may have completed before worker restart"
+                    delivery.last_error = "direct recipient send may have completed before worker restart"
                     delivery.next_attempt_at = None
                     continue
-                if direct_routes is not None and not direct_routes:
+                if (direct_routes is not None and not direct_routes) or person_routes is None:
                     self._mark_terminal_without_claim(delivery, status="ineligible")
                     continue
                 represented_actor_ids = self._eligible_actor_ids(
@@ -100,7 +102,9 @@ class UserActorDeliveryClaimRepository:
                 )
                 group_ids = tuple(actor for actor, inbox in (direct_routes or ())
                                   if inbox == delivery.target_endpoint_url)
-                allowed_actors = tuple(dict.fromkeys((*represented_actor_ids, *group_ids)))
+                person_ids = tuple(actor for actor, inbox in person_routes
+                                   if inbox == delivery.target_endpoint_url)
+                allowed_actors = tuple(dict.fromkeys((*represented_actor_ids, *group_ids, *person_ids)))
                 user = session.get(User, source.user_id)
                 if not allowed_actors or user is None:
                     self._mark_terminal_without_claim(delivery, status="ineligible")
@@ -112,6 +116,7 @@ class UserActorDeliveryClaimRepository:
                     user=user,
                     represented_actor_ids=allowed_actors,
                     direct_group_routes=direct_routes or (),
+                    direct_person_routes=person_routes,
                     claimed_at=now,
                 )
                 claimed.append(claimed_delivery)
@@ -197,7 +202,7 @@ class UserActorDeliveryClaimRepository:
             return None
         # Direct Group mutations cannot replace an unsent Create; preserving
         # chronological Create→Update→Delete is required even for terminal Delete.
-        if UserActorDeliveryClaimRepository._has_direct_group_snapshot(source):
+        if UserActorDeliveryClaimRepository._has_direct_endpoint_proof(source):
             return None
         return session.scalar(
             select(UserActorOutboundDelivery.status)
@@ -255,7 +260,7 @@ class UserActorDeliveryClaimRepository:
         """Apply FIFO except that terminal Delete may bypass unsent failures."""
         blocking_statuses = (
             ("pending", "failed", "sending", "unknown", "ineligible", "superseded")
-            if UserActorDeliveryClaimRepository._has_direct_group_snapshot(source)
+            if UserActorDeliveryClaimRepository._has_direct_endpoint_proof(source)
             else ("sending", "unknown")
             if source.source_kind == "content_delete"
             else ("pending", "failed", "sending", "unknown")
@@ -293,6 +298,7 @@ class UserActorDeliveryClaimRepository:
         user: User,
         represented_actor_ids: tuple[str, ...],
         direct_group_routes: tuple[tuple[str, str], ...],
+        direct_person_routes: tuple[tuple[str, str], ...],
         claimed_at: datetime,
     ) -> ClaimedUserActorDelivery:
         """Transition one eligible candidate to sending and return its payload."""
@@ -311,6 +317,7 @@ class UserActorDeliveryClaimRepository:
             target_endpoint_url=delivery.target_endpoint_url,
             represented_actor_ids=represented_actor_ids,
             direct_group_routes=direct_group_routes,
+            direct_person_routes=direct_person_routes,
             activity_json=json.loads(source.activity_json),
             claim_token=token,
         )
@@ -323,6 +330,87 @@ class UserActorDeliveryClaimRepository:
         except (TypeError, ValueError):
             return False
         return isinstance(snapshot, dict) and "directGroupRecipients" in snapshot
+
+    @staticmethod
+    def _has_direct_endpoint_proof(source: UserActorOutboundSource) -> bool:
+        """Keep direct Person delivery in the same strict lifecycle as Group grants."""
+        try:
+            snapshot = json.loads(source.snapshot_json)
+        except (TypeError, ValueError):
+            return False
+        return isinstance(snapshot, dict) and (
+            "directGroupRecipients" in snapshot or bool(snapshot.get("directPersonRecipients"))
+        )
+
+    @staticmethod
+    def _eligible_direct_person_routes(
+        session: Session, source: UserActorOutboundSource,
+    ) -> tuple[tuple[str, str], ...] | None:
+        """Return source-proven Person actor/inbox pairs, or None on tampering.
+
+        An empty list means no direct Person target, while malformed original
+        evidence fails closed.  Mutations may inherit only from their own
+        persisted Create; current follower or Discord assignments are irrelevant.
+        """
+        try:
+            snapshot = json.loads(source.snapshot_json)
+            if not isinstance(snapshot, dict):
+                return None
+            entries = snapshot.get("directPersonRecipients", [])
+            if not isinstance(entries, list) or source.source_kind not in {
+                "content_create", "content_update", "content_delete",
+            }:
+                return None if "directPersonRecipients" in snapshot else ()
+            if not entries:
+                return ()
+            activity = json.loads(source.activity_json)
+            if not isinstance(activity, dict) or activity.get("actor") is None:
+                return None
+            actor_url = activity["actor"]
+            if not isinstance(actor_url, str):
+                return None
+            pairs: list[tuple[str, str]] = []
+            for item in entries:
+                if not isinstance(item, dict) or set(item) != {"actorId", "inboxUrl"}:
+                    return None
+                actor_id, inbox_url = item["actorId"], item["inboxUrl"]
+                if not isinstance(actor_id, str) or not isinstance(inbox_url, str):
+                    return None
+                actor_uri, inbox_uri = urlsplit(actor_id), urlsplit(inbox_url)
+                if (actor_uri.scheme != "https" or inbox_uri.scheme != "https"
+                    or not actor_uri.hostname or not inbox_uri.hostname
+                    or actor_uri.username or inbox_uri.username
+                    or actor_uri.password or inbox_uri.password
+                    or actor_uri.fragment or inbox_uri.fragment):
+                    return None
+                pairs.append((actor_id, inbox_url))
+            actor_ids = [actor for actor, _inbox in pairs]
+            if sorted(set(actor_ids)) != actor_ids:
+                return None
+            if activity.get("cc") != [actor_url, f"{actor_url}/followers", *actor_ids]:
+                return None
+            obj = activity.get("object")
+            if source.source_kind in {"content_create", "content_update"}:
+                if (not isinstance(obj, dict) or obj.get("attributedTo") != actor_url
+                    or obj.get("cc") != [f"{actor_url}/followers", *actor_ids]):
+                    return None
+            if source.source_kind != "content_create":
+                original = session.scalar(select(UserActorOutboundSource).where(
+                    UserActorOutboundSource.published_object_id == source.published_object_id,
+                    UserActorOutboundSource.source_kind == "content_create",
+                ))
+                if (original is None
+                    or json.loads(original.snapshot_json).get("directPersonRecipients") != entries):
+                    return None
+            else:
+                # The original source itself fixes the only valid endpoint set.
+                if activity.get("type") != "Create":
+                    return None
+            if source.source_kind != "content_create" and activity.get("type") not in {"Update", "Delete"}:
+                return None
+            return tuple(pairs)
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return None
 
     @staticmethod
     def _eligible_direct_routes(

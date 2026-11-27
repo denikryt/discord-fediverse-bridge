@@ -3,7 +3,7 @@ import {
   InProcessMessageQueue,
   MemoryKvStore,
 } from "@fedify/fedify";
-import { Accept, Announce, Create, Delete, Follow, Undo, Update } from "@fedify/vocab";
+import { Accept, Announce, Create, Delete, Follow, Note, Reject, Undo, Update } from "@fedify/vocab";
 
 import {
   buildBridgeServiceActor,
@@ -23,9 +23,13 @@ import { buildLocalCommunityPublicKeyCarrier } from "./local-community-keys.js";
 import type { GatewayContextData } from "./config.js";
 import {
   normalizeCreateActivity,
+  normalizeDirectRemotePersonEventFromJson,
+  normalizeDirectRemotePersonCommentFromJson,
   normalizeCreateActivityFromJson,
   normalizeUpdateActivityFromJson,
   normalizeDeleteActivityFromJson,
+  normalizeVerifiedAnnounceDeleteFromJson,
+  resolveCommunityActorIdForDelete,
 } from "./normalize.js";
 import { getPythonBridgeClient } from "./python-bridge-client.js";
 import { admitRemoteDeliveryEndpoint, type RemoteEndpointAdmissionOptions } from "./remote-delivery-endpoints.js";
@@ -41,7 +45,43 @@ import type {
   LocalFollowRequestedEvent,
   LocalUnfollowRequestedEvent,
   RemoteGroupAnnounceEvent,
+  RemotePersonContentEvent,
+  RemotePersonCommentEvent,
 } from "./types.js";
+
+/** Keep remote Person direct content out of Group distribution paths. */
+function isRemotePersonContentEvent(
+  event: BridgeContentEvent | RemotePersonContentEvent,
+): event is RemotePersonContentEvent {
+  return event.event_type === "remote.person.created"
+    || event.event_type === "remote.person.updated"
+    || event.event_type === "remote.person.deleted";
+}
+
+/** Enrich a signed direct Person Note from its own verified Actor profile.
+ *
+ * Profile fetch is presentation-only: errors, mismatched IDs and absent
+ * profiles retain the actor-URI fallback supplied by the JSON normalizer.
+ */
+async function enrichDirectPersonActor(
+  activity: Create | Update,
+  event: RemotePersonContentEvent | RemotePersonCommentEvent,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const actor = await activity.getActor({ suppressError: true });
+    if (actor?.id?.href !== event.actor_id) return null;
+    const profile = await actor.toJsonLd() as Record<string, unknown>;
+    // The title of the Note is not a username. Use only actor-level labels
+    // and never let profile fetch change the verified ActivityPub Actor ID.
+    const candidate = [profile.preferredUsername, profile.name].find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    );
+    if (candidate != null) event.object.author_name = candidate.trim();
+    return profile;
+  } catch {
+    return null;
+  }
+}
 
 export function createGatewayFederation(
   config: GatewayContextData,
@@ -148,6 +188,58 @@ export function createGatewayFederation(
         // Direct Create handling is the path when the remote server does not
         // wrap local objects inside Announce. The synchronous inbox must not
         // acknowledge events that Python did not persist.
+        // Only the direct Fedify-verified Create can establish a signed Person
+        // root. Group-wrapped Create(Note) remains on the legacy Announce path.
+        const outerJson = await activity.toJsonLd() as Record<string, unknown>;
+        const directObject = await activity.getObject({ suppressError: true });
+        if (directObject instanceof Note && directObject.replyTargetId == null) {
+          const noteJson = await directObject.toJsonLd() as Record<string, unknown>;
+          const personEvent = normalizeDirectRemotePersonEventFromJson({
+            ...outerJson, object: noteJson,
+          });
+          if (personEvent != null) {
+            const profile = await enrichDirectPersonActor(activity, personEvent);
+            if (profile != null) {
+              const icon = profile.icon;
+              if (icon != null && typeof icon === "object") {
+                const iconJson = icon as Record<string, unknown>;
+                const candidate = iconJson.url;
+                personEvent.object.avatar_url = typeof candidate === "string" ? candidate
+                  : candidate != null && typeof candidate === "object"
+                    ? (candidate as Record<string, unknown>).href as string | undefined ?? null
+                    : null;
+              }
+            }
+            await deliverNormalizedEvent(config, personEvent, {
+              deliveryId: personEvent.delivery_id,
+              eventType: personEvent.event_type, objectId: personEvent.object.ap_id,
+            });
+            return;
+          }
+        }
+        if (directObject instanceof Note && directObject.replyTargetId != null) {
+          const parentId = directObject.replyTargetId.href;
+          const target = await getPythonBridgeClient(config).loadConversationTargetByObjectId(parentId);
+          if (target?.publicationContext === "remote_person_feed"
+              || (target == null && ctx.data.activitypubInboxOwner?.kind !== "community")) {
+            const noteJson = await directObject.toJsonLd() as Record<string, unknown>;
+            const event = normalizeDirectRemotePersonCommentFromJson({
+              ...outerJson, object: noteJson,
+            });
+            if (event != null) {
+              await enrichDirectPersonActor(activity, event);
+              // A verified public child may precede its canonical parent.
+              // Python retains it without any Discord side effect until the
+              // parent resolves to an accepted remote Person root. Known
+              // Group and Personal Feed parent routes keep their old owners.
+              await deliverNormalizedEvent(config, event, {
+                deliveryId: event.delivery_id, eventType: event.event_type,
+                objectId: event.object.ap_id,
+              });
+              return;
+            }
+          }
+        }
         const event = await normalizeCreateActivity(activity, {
           pythonBridgeClient: getPythonBridgeClient(config),
         });
@@ -255,9 +347,17 @@ export function createGatewayFederation(
             logDebug(isDebug, "normalizeUpdateActivityFromJson returned null");
             return;
           }
+          if (isRemotePersonContentEvent(event)) {
+            // The verified outer Announce signer is a distributor, not proof
+            // that the embedded remote Person signed this mutation.
+            return;
+          }
           event.source_activity_json = updateRecord;
           event.source_activity_id = asString(updateRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
+          // The outer Group was authenticated by Fedify; the nested Person
+          // actor was not. Python grants only a Group-local display mutation.
+          event.verified_sender_actor_id = asActivityIri(announceEnvelope.rawRecord.actor);
           // One wire Announce is one receipt, regardless of the nested Create,
           // Update, or Delete id. Keep that inner id only as provenance.
           event.delivery_id = announceEnvelope.announceId;
@@ -273,14 +373,22 @@ export function createGatewayFederation(
 
         const deleteRecord = extractDeleteRecord(announceEnvelope.rawRecord);
         if (deleteRecord != null) {
-          const event = await normalizeDeleteActivityFromJson(deleteRecord, { pythonBridgeClient: getPythonBridgeClient(config) });
+          const event = await normalizeVerifiedAnnounceDeleteFromJson(
+            announceEnvelope.rawRecord, { pythonBridgeClient: getPythonBridgeClient(config) },
+          );
           if (event == null) {
             logDebug(isDebug, "normalizeDeleteActivityFromJson returned null");
+            return;
+          }
+          if (isRemotePersonContentEvent(event)) {
+            // The verified outer Announce signer is a distributor, not proof
+            // that the embedded remote Person signed this mutation.
             return;
           }
           event.source_activity_json = deleteRecord;
           event.source_activity_id = asString(deleteRecord.id) ?? event.delivery_id;
           event.source_announce_id = announceEnvelope.announceId;
+          event.verified_sender_actor_id = asActivityIri(announceEnvelope.rawRecord.actor);
           // One wire Announce is one receipt, regardless of the nested Create,
           // Update, or Delete id. Keep that inner id only as provenance.
           event.delivery_id = announceEnvelope.announceId;
@@ -335,6 +443,17 @@ export function createGatewayFederation(
         followActivityId: event.object.follow_activity_id,
       });
     })
+    .on(Reject, async (ctx, activity) => {
+      // A remote Person's Reject(Follow) is authenticated by Fedify before
+      // the exact outgoing Follow generation is resolved by Python.
+      const event = buildFollowRejectedEvent(activity, ctx.data);
+      if (event == null) return;
+      await deliverNormalizedEvent(config, event, {
+        deliveryId: event.delivery_id,
+        eventType: event.event_type,
+        followActivityId: event.object.follow_activity_id,
+      });
+    })
     .on(Accept, async (ctx, activity) => {
       // Accept.objectId comes from the verified Fedify activity, including
       // when the original signed envelope embedded a Follow object.
@@ -385,6 +504,12 @@ async function deliverVerifiedLocalContentEvent(
     return;
   }
   if (selected.kind === "remote") {
+    // A direct Fedify listener authenticated the outer author; do not infer
+    // Person signatures from an Announce's nested actor. Wrapped mutation
+    // callers carry their verified Group sender explicitly instead.
+    if (event.source_announce_id == null) {
+      event.verified_sender_actor_id = asActivityIri(signedActivityJson.actor);
+    }
     await deliverNormalizedEvent(config, event, logContext);
     return;
   }
@@ -416,7 +541,7 @@ async function deliverVerifiedLocalContentEvent(
 
 async function deliverNormalizedEvent(
   config: GatewayContextData,
-  event: BridgeContentEvent | RemoteGroupAnnounceEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
+  event: BridgeContentEvent | RemotePersonContentEvent | RemotePersonCommentEvent | RemoteGroupAnnounceEvent | FollowAcceptedEvent | LocalFollowRequestedEvent | LocalUnfollowRequestedEvent,
   logContext: Record<string, unknown>,
 ): Promise<void> {
   // All successful normalization funnels through one delivery path so logging
@@ -435,6 +560,24 @@ export async function deliverDirectUpdateActivity(
 ): Promise<void> {
   /** Normalize one direct Update and deliver it to the Python bridge. */
   const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
+  const updated = sourceActivityJson.object;
+  if (updated != null && typeof updated === "object") {
+    const note = updated as Record<string, unknown>;
+    const id = typeof note.id === "string" ? note.id : null;
+    if (note.type === "Note" && id != null) {
+      const target = await getPythonBridgeClient(config).loadConversationTargetByObjectId(id);
+      if (target?.publicationContext === "remote_person_feed" && id !== target.rootObjectId) {
+        const event = normalizeDirectRemotePersonCommentFromJson(sourceActivityJson);
+        if (event != null) {
+          await enrichDirectPersonActor(activity, event);
+          await deliverNormalizedEvent(config, event, {
+            deliveryId: event.delivery_id, eventType: event.event_type, objectId: id,
+          });
+        }
+        return;
+      }
+    }
+  }
   const event = await normalizeUpdateActivityFromJson(sourceActivityJson, {
     pythonBridgeClient: getPythonBridgeClient(config),
   });
@@ -442,8 +585,18 @@ export async function deliverDirectUpdateActivity(
     logDebug(isDebug, "normalizeUpdateActivityFromJson returned null for direct Update");
     return;
   }
-  event.source_activity_json = sourceActivityJson;
+  // Direct Person normalization already canonicalized the ActivityStreams
+  // Public alias. Replacing its source with raw JSON-LD breaks Python's
+  // authenticated audience check on valid `as:Public` Updates.
+  if (!isRemotePersonContentEvent(event)) event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
+  if (isRemotePersonContentEvent(event)) {
+    await enrichDirectPersonActor(activity, event);
+    await deliverNormalizedEvent(config, event, {
+      deliveryId: event.delivery_id, eventType: event.event_type, objectId: event.object.ap_id,
+    });
+    return;
+  }
   event.source_announce_id = null;
   await deliverVerifiedLocalContentEvent(config, trustedContext, event,
     sourceActivityJson, {
@@ -460,13 +613,77 @@ export async function deliverDirectDeleteActivity(
 ): Promise<void> {
   /** Normalize one direct Delete and deliver it to the Python bridge. */
   const sourceActivityJson = await activity.toJsonLd() as Record<string, unknown>;
-  const event = await normalizeDeleteActivityFromJson(sourceActivityJson, { pythonBridgeClient: getPythonBridgeClient(config) });
-  if (event == null) {
+  const deleted = sourceActivityJson.object;
+  const deletedId = typeof deleted === "string" ? deleted
+    : deleted != null && typeof deleted === "object" && typeof (deleted as Record<string, unknown>).id === "string"
+      ? (deleted as Record<string, unknown>).id as string : null;
+  // A Delete containing only an object IRI does not reveal whether that
+  // unknown Note was a root or reply. The Python bridge retains one bounded
+  // provisional identity until a signed Create proves its actual shape.
+  const target = deletedId == null ? null
+    : await getPythonBridgeClient(config).loadConversationTargetByObjectId(deletedId);
+  if (deletedId != null && target?.publicationContext === "remote_person_feed") {
+    // Canonical storage already knows whether the Note is a root or reply.
+    // URL spelling (/post/NN on NodeBB, for example) is never a type proof.
+    const event = deletedId === target.rootObjectId
+      ? normalizeDirectRemotePersonEventFromJson(sourceActivityJson)
+      : normalizeDirectRemotePersonCommentFromJson(sourceActivityJson);
+    if (event != null) {
+      await deliverNormalizedEvent(config, event, {
+        deliveryId: event.delivery_id, eventType: event.event_type, objectId: deletedId,
+      });
+    }
+    return;
+  }
+  // Normalization recognizes explicit remote Group audience/cc addresses.
+  // A missing Person target is not proof that an already-mapped Community
+  // post belongs to a Person feed; keep the Community route authoritative.
+  const normalized = await normalizeDeleteActivityFromJson(sourceActivityJson, {
+    pythonBridgeClient: getPythonBridgeClient(config),
+  });
+  const groupAddressed = resolveCommunityActorIdForDelete(sourceActivityJson) != null;
+  if (deletedId != null && target == null) {
+    // An unknown object's URL path cannot prove whether it is a Note root,
+    // reply, or a Lemmy-style /post/ ID. For signed direct Person inboxes,
+    // stage one author-scoped tombstone regardless of that path spelling.
+    // First honor *verified* local Group addressing so community Deletes
+    // retain their original routing and cannot be stolen by this fallback.
+    const route: VerifiedInboxRoute = trustedContext?.activitypubInboxPath === "shared"
+      ? { kind: "shared" }
+      : trustedContext?.activitypubInboxPath === "actor"
+        ? { kind: "actor", owner: trustedContext.activitypubInboxOwner }
+        : { kind: "unknown" };
+    const destination = await selectVerifiedLocalGroupDestinations(
+      config.fedifyOrigin, route, sourceActivityJson,
+      async (candidate) => {
+        const group = await resolveLocalCommunityByActorUrl(config, candidate);
+        return group?.actorId.href ?? null;
+      },
+    );
+    if (destination.kind === "remote" && !groupAddressed) {
+      const provisional = normalizeDirectRemotePersonCommentFromJson(sourceActivityJson);
+      if (provisional != null) {
+        await deliverNormalizedEvent(config, provisional, {
+          deliveryId: provisional.delivery_id, eventType: provisional.event_type,
+          objectId: provisional.object.ap_id,
+        });
+        return;
+      }
+    }
+  }
+  if (normalized == null) {
     logDebug(isDebug, "normalizeDeleteActivityFromJson returned null for direct Delete");
     return;
   }
+  const event = normalized;
   event.source_activity_json = sourceActivityJson;
   event.source_activity_id = typeof sourceActivityJson.id === "string" ? sourceActivityJson.id : event.delivery_id;
+  if (isRemotePersonContentEvent(event)) {
+    await deliverNormalizedEvent(config, event, {
+      deliveryId: event.delivery_id, eventType: event.event_type, objectId: event.object.ap_id,
+    });
+    return;
+  }
   event.source_announce_id = null;
   await deliverVerifiedLocalContentEvent(config, trustedContext, event,
     sourceActivityJson, {
@@ -642,7 +859,7 @@ function logDebug(isDebug: boolean, message: string): void {
 /** Build Accept only from the verified actor and original Follow object ID. */
 export function buildFollowAcceptedEvent(
   activity: Accept,
-  _data: GatewayContextData,
+  data: GatewayContextData,
   _fallbackDeliveryId: string | null,
 ): FollowAcceptedEvent | null {
   // Raw request-local JSON and the ID-only cache were captured before the
@@ -651,14 +868,47 @@ export function buildFollowAcceptedEvent(
   const followActivityId = activity.objectId?.href;
   const acceptId = activity.id?.href;
   if (actorId == null || followActivityId == null || acceptId == null) return null;
+  // An actor-specific inbox is a server-verified recipient boundary. A signed
+  // remote Accept for Carol's Follow cannot be routed via Alice's inbox.
+  if (!followResponseMatchesInbox(data, followActivityId)) return null;
   return {
     actor_id: actorId,
     community_actor_id: actorId,
     delivery_id: acceptId,
     event_type: "follow.accepted",
+    local_recipient_actor_id: data.activitypubInboxPath === "actor"
+      ? data.activitypubInboxOwner?.actorUrl ?? null : null,
     object: { follow_activity_id: followActivityId },
     occurred_at: new Date().toISOString(),
   };
+}
+
+/** Build a signed Reject(Follow) lifecycle event using the verified activity. */
+export function buildFollowRejectedEvent(
+  activity: Reject, data?: GatewayContextData,
+): FollowAcceptedEvent | null {
+  const actorId = activity.actorId?.href;
+  const followActivityId = activity.objectId?.href;
+  const id = activity.id?.href;
+  if (actorId == null || followActivityId == null || id == null) return null;
+  if (data != null && !followResponseMatchesInbox(data, followActivityId)) return null;
+  return {
+    actor_id: actorId,
+    community_actor_id: actorId,
+    delivery_id: id,
+    event_type: "follow.rejected",
+    local_recipient_actor_id: data?.activitypubInboxPath === "actor"
+      ? data.activitypubInboxOwner?.actorUrl ?? null : null,
+    object: { follow_activity_id: followActivityId },
+    occurred_at: new Date().toISOString(),
+  };
+}
+
+/** Accept signed Follow responses only for the owner of an actor-specific inbox. */
+function followResponseMatchesInbox(data: GatewayContextData, followId: string): boolean {
+  if (data.activitypubInboxPath !== "actor") return true;
+  const owner = data.activitypubInboxOwner;
+  return owner != null && followId.startsWith(`${owner.actorUrl}/activities/follow/`);
 }
 
 export async function buildLocalFollowRequestedEvent(
@@ -726,6 +976,11 @@ export async function buildLocalFollowRequestedEvent(
       follow_activity_id: activity.id.href,
       remote_inbox_url: admittedInboxUrl,
       remote_shared_inbox_url: admittedSharedInboxUrl,
+      ...(targetKind === "user" ? {
+        remote_actor_display_name: [remoteActor?.preferredUsername, remoteActor?.name]
+          .find((name): name is string => typeof name === "string" && name.trim().length > 0)
+          ?.trim().slice(0, 256) ?? null,
+      } : {}),
     },
     occurred_at: new Date().toISOString(),
   };

@@ -328,14 +328,16 @@ def test_release_transfer_errors_roll_back_all_schema_and_data(tmp_path: Path) -
 def test_legacy_main_upgrade_selectively_invalidates_changed_actor_relationships(
     tmp_path: Path,
 ) -> None:
-    """One migration invalidates only subscriptions bound to old actor identity."""
+    """Legacy actor invalidation survives the complete v0→v1→v2 upgrade."""
     database, path = _fixture(tmp_path, "known_main_v0")
     try:
         with database.engine.begin() as conn:
             _seed_local_actors(conn, legacy=True)
         database.migrate(_CONFIG)
         with database.engine.connect() as conn:
-            assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 1
+            # The production runner now completes both registered schema steps
+            # before admitting a legacy deployment; v1 is only intermediate.
+            assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == 2
             assert conn.execute(text("SELECT actor_url FROM bridge_actor_keys")).scalar_one() == (
                 "https://bridge.example/actors/services/bridge"
             )

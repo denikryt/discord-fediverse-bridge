@@ -15,7 +15,7 @@ export function buildPublishedActivityObjectJson(
   const attributedTo = canonicalActorUrlForRecord(record);
   const published = normalizePublishedTimestamp(record.publishedAt);
   const htmlContent = markdownToHtml(record.bodyMarkdown);
-  if (record.publicationContext === "personal_feed") {
+  if (record.publicationContext === "personal_feed" || record.publicationContext === "remote_person_feed") {
     return {
       "@context": "https://www.w3.org/ns/activitystreams",
       type: "Note",
@@ -23,7 +23,8 @@ export function buildPublishedActivityObjectJson(
       url: record.objectId,
       attributedTo,
       to: [ACTIVITYSTREAMS_PUBLIC],
-      cc: [`${attributedTo}/followers`],
+      cc: [`${attributedTo}/followers`, ...(record.directPersonActorIds ?? [])],
+      ...(record.inReplyToObjectId ? { inReplyTo: record.inReplyToObjectId } : {}),
       source: { content: record.bodyMarkdown, mediaType: "text/markdown" },
       content: safeMarkdownToHtml(record.bodyMarkdown),
       published,
@@ -56,11 +57,11 @@ export function buildPublishedCreateActivityJson(
   record: PublishedActivityObjectRow,
 ): Record<string, unknown> {
   const actor = canonicalActorUrlForRecord(record);
-  if (record.publicationContext === "personal_feed") {
+  if (record.publicationContext === "personal_feed" || record.publicationContext === "remote_person_feed") {
     return {
       "@context": "https://www.w3.org/ns/activitystreams", id: record.activityId,
       type: "Create", actor, to: [ACTIVITYSTREAMS_PUBLIC],
-      cc: [actor, `${actor}/followers`], object: buildPublishedActivityObjectJson(record),
+      cc: [actor, `${actor}/followers`, ...(record.directPersonActorIds ?? [])], object: buildPublishedActivityObjectJson(record),
     };
   }
   if (record.communityActorUrl == null) {

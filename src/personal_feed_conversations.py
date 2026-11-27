@@ -5,16 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timezone
 from hashlib import sha256
+import logging
 
 from .content_sync.persistence import (
     inspect_publish_artifacts,
     persist_publish_artifacts,
 )
 from .fedify_gateway_client import RenderPersonalFeedRequest
+from .conversation_parent_resolver import ConversationParentResolver
 from .activitypub_identity_urls import (
     build_user_comment_object_id,
     build_user_create_comment_activity_id,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +53,7 @@ class PersonalFeedConversationRuntime:
         self.bridge_policy_service = bridge_policy_service
         self.fedify_origin = fedify_origin.rstrip("/")
         self.delivery_worker = delivery_worker
+        self.parent_resolver = ConversationParentResolver(database)
 
 
     def bind_delivery_wake(self, delivery_worker: object) -> None:
@@ -85,12 +91,21 @@ class PersonalFeedConversationRuntime:
         event_type = str(getattr(event, "event_type"))
         if event_type == "comment.created":
             parent_id = getattr(obj, "parent_ap_id", None)
-            parent_known = bool(
-                parent_id == root_object_id
-                or self.database.personal_feed_conversations.resolve_conversation_object(
+            parent_resolution = (
+                self.database.personal_feed_conversations.resolve_conversation_object(
                     parent_id
                 )
+                if parent_id != root_object_id and parent_id is not None
+                else None
             )
+            # Reject a known parent from another context/root immediately. An
+            # unknown parent may arrive later and stays pending until then.
+            if parent_resolution is not None and (
+                parent_resolution[0] != "personal_feed"
+                or parent_resolution[1] != root_object_id
+            ):
+                return PersonalFeedConversationResult("rejected", "foreign_parent_root")
+            parent_known = bool(parent_id == root_object_id or parent_resolution)
             root = self.database.activitypub_objects.get_published_activity_object_by_object_id(
                 root_object_id
             )
@@ -215,15 +230,25 @@ class PersonalFeedConversationRuntime:
         published_at = created_at.isoformat(timespec="milliseconds").replace(
             "+00:00", "Z"
         )
-        parent_object_id = root.object_id
         reference = getattr(message, "reference", None)
         reference_id = getattr(reference, "message_id", None)
-        if reference_id is not None:
-            mapped = self.database.message_mappings.get_message_mapping_by_discord_message_id(
-                int(reference_id)
+        parent_object_id = self.parent_resolver.resolve_local_reply(
+            root_object_id=root.object_id,
+            thread_id=int(thread_id),
+            referenced_message_id=int(reference_id) if reference_id is not None else None,
+        )
+        # A Discord reference is only an AP parent after it passes a scoped
+        # placement lookup; record unknown/foreign references for diagnosis.
+        reference_fell_back = bool(
+            reference_id is not None
+            and int(reference_id) != int(root.discord_message_id)
+            and parent_object_id == root.object_id
+        )
+        if reference_fell_back:
+            logger.info(
+                "Personal-feed Discord Reply %s references unmapped/foreign message %s; using root %s",
+                message_id, reference_id, root.object_id,
             )
-            if mapped is not None:
-                parent_object_id = mapped.object_id
         existing = inspect_publish_artifacts(
             self.database,
             source_id=str(message_id),
@@ -244,21 +269,29 @@ class PersonalFeedConversationRuntime:
             return PersonalFeedConversationResult(
                 "already_published", "duplicate", object_id
             )
-        direct_target_inbox_urls: list[str] = []
-        parent_actor_id: str | None = None
+        direct_person_recipients: list[dict[str, str]] = []
         parent_inbound = self.database.personal_feed_conversations.get_inbound_object(
             parent_object_id
         )
         if parent_inbound is not None:
+            # A signed inbound comment supplies the intended actor ID, but not
+            # immutable transport authorization. Dereference the exact Person
+            # through Fedify before rendering its canonical audience.
             parent_actor_id = parent_inbound.actor_id
-        if parent_actor_id is not None:
-            remote_actor = self.database.remote_actors.get_remote_actor_by_actor_url(
-                parent_actor_id
-            )
-            if remote_actor is not None:
-                direct_target_inbox_urls.append(
-                    remote_actor.shared_inbox_url or remote_actor.inbox_url
-                )
+            try:
+                resolved = await self.fedify_gateway.resolve_remote_person(parent_actor_id)
+                if resolved.actor_id != parent_actor_id:
+                    raise ValueError("remote parent actor identity changed during lookup")
+                if not (self.bridge_policy_service.federation_decision(resolved.actor_id).allowed
+                        and self.bridge_policy_service.federation_decision(resolved.inbox_url).allowed):
+                    raise ValueError("remote parent actor or inbox denied by federation policy")
+                direct_person_recipients = [{
+                    "actorId": resolved.actor_id,
+                    "inboxUrl": resolved.inbox_url,
+                }]
+            except Exception as exc:
+                logger.warning("Personal Feed cannot verify direct Person recipient %s: %s", parent_actor_id, exc)
+                return PersonalFeedConversationResult("rejected", "remote_parent_unresolvable")
         rendered = await self.fedify_gateway.render_personal_feed(
             RenderPersonalFeedRequest(
                 actor_username=user.activitypub_username,
@@ -270,6 +303,7 @@ class PersonalFeedConversationRuntime:
                 kind="comment",
                 in_reply_to_object_id=parent_object_id,
                 conversation_root_object_id=root.object_id,
+                direct_person_actor_ids=[row["actorId"] for row in direct_person_recipients],
             )
         )
         persisted = persist_publish_artifacts(
@@ -291,8 +325,10 @@ class PersonalFeedConversationRuntime:
             discord_channel_id=root.discord_channel_id,
             discord_message_id=message_id,
             published_at=created_at,
-            direct_target_inbox_urls=direct_target_inbox_urls,
+            direct_person_recipients=direct_person_recipients,
         )
         if persisted.created and self.delivery_worker is not None:
             self.delivery_worker.wake()
-        return PersonalFeedConversationResult("published", "published", object_id)
+        return PersonalFeedConversationResult(
+            "published", "fallback_unknown_reference" if reference_fell_back else "published", object_id
+        )

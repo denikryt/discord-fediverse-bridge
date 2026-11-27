@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from html import unescape
-from urllib.parse import urlparse
+import re
+from urllib.parse import urlparse, urlsplit
 
 
 DISCORD_MESSAGE_LIMIT = 2000
@@ -43,6 +44,295 @@ def format_fediverse_author_for_discord(author: str, actor_id: str = "") -> str:
         if domain:
             return f"`{author}@{domain}`"
     return f"`{author}`"
+
+
+
+# The feed-only layout protects complete links while retaining the unchanged
+# Commons/NodeBB renderer and its historical truncate() behavior.
+_FEED_RAW_LINK = re.compile(r"<https?://[^\s<>]+>|https?://[^\s<>]+")
+
+
+def _feed_markdown_link_end(body: str, start: int) -> int | None:
+    """Find a complete masked link, including escaped labels and balanced URL parens.
+
+    This narrow parser recognizes the Markdown forms supported by feed layout;
+    it does not attempt to parse arbitrary Markdown or change Community output.
+    """
+    if body[start] != '[':
+        return None
+    position = start + 1
+    nesting = 1
+    while position < len(body):
+        char = body[position]
+        if char == '\\':
+            # An escaped closing bracket is part of the label, not its end.
+            position += 2
+            continue
+        if char == '\n':
+            return None
+        if char == '[':
+            nesting += 1
+        elif char == ']':
+            nesting -= 1
+            if nesting == 0:
+                break
+        position += 1
+    # Empty alt text is valid for an image, not for an ordinary masked link.
+    if (nesting != 0 or (position == start + 1 and not (start > 0 and body[start-1] == '!'))
+            or body[position + 1:position + 2] != '('):
+        return None
+    destination = position + 2
+    if body.startswith('<http://', destination) or body.startswith('<https://', destination):
+        close = body.find('>', destination + 1)
+        if close < 0 or any(char.isspace() for char in body[destination:close]):
+            return None
+        return close + 2 if body[close + 1:close + 2] == ')' else None
+    if not (body.startswith('http://', destination) or body.startswith('https://', destination)):
+        return None
+    # A raw destination may have nested parentheses: the first ')' is not
+    # necessarily the Markdown closer. Backslash escapes do not change depth.
+    depth = 1
+    cursor = destination
+    while cursor < len(body):
+        char = body[cursor]
+        if char == '\\':
+            cursor += 2
+            continue
+        if char.isspace() or char == '<' or char == '>':
+            return None
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            if depth == 0:
+                return cursor + 1
+        cursor += 1
+    return None
+
+
+def _feed_protected_spans(body: str) -> list[tuple[int, int]]:
+    """Return protected URL/link boundaries for safe feed-body truncation."""
+    # Raw URLs and angle autolinks need no Markdown parsing. The second pass
+    # expands masked links to include their entire (possibly escaped) label.
+    spans = [match.span() for match in _FEED_RAW_LINK.finditer(body)]
+    # Closing brackets identify candidate links. Scan labels once with a stack,
+    # rather than rescanning the entire tail for every unclosed '[' in a
+    # potentially attacker-controlled Note body.
+    stack: list[int] = []
+    cursor = 0
+    while cursor < len(body):
+        char = body[cursor]
+        if char == '\\':
+            cursor += 2
+            continue
+        if char == '[':
+            stack.append(cursor)
+        elif char == ']' and stack and body[cursor + 1:cursor + 2] == '(':
+            opening = stack.pop()
+            end = _feed_markdown_link_end(body, opening)
+            if end is not None:
+                spans.append((opening, end))
+                cursor = end
+                continue
+        elif char == ']' and stack:
+            stack.pop()
+        cursor += 1
+    return sorted(spans)
+
+
+def validate_feed_object_url(object_id: str) -> str:
+    """Validate an immutable AP identity before embedding it in Discord text."""
+    if not isinstance(object_id, str) or not object_id or any(
+        ord(ch) < 32 or ord(ch) == 127 or ch in '<>\\`' for ch in object_id
+    ):
+        raise ValueError('invalid canonical feed object URL')
+    try:
+        target = urlsplit(object_id)
+    except ValueError as exc:
+        raise ValueError('invalid canonical feed object URL') from exc
+    if (target.scheme not in ('http', 'https') or not target.hostname
+            or target.username or target.password or any(ch.isspace() for ch in object_id)):
+        raise ValueError('invalid canonical feed object URL')
+    return object_id
+
+
+def feed_author_header(name: str, actor_id: str) -> str:
+    """Reuse Community-style author attribution without untrusted Markdown controls."""
+    # Backtick code spans are the Community convention; raw name backticks
+    # would terminate the span and make a forged mention/header possible.
+    safe_name = re.sub(r'[\r\n\t`<>]', '', str(name or '')).strip()
+    return format_fediverse_author_for_discord(safe_name or 'Remote user', actor_id)
+
+
+def _utf16_units(value: str) -> int:
+    """Count UTF-16 code units, including surrogate pairs for Unicode emoji."""
+    return len(value.encode('utf-16-le')) // 2
+
+
+def _prefix_for_budget(value: str, units: int) -> int:
+    """Return the last complete Unicode codepoint fitting the Discord budget."""
+    count = 0
+    for index, char in enumerate(value):
+        count += 2 if ord(char) > 0xffff else 1
+        if count > units:
+            return index
+    return len(value)
+
+
+def _fit_feed_body(body: str, budget: int) -> str:
+    """Keep whole fitting links in order, replacing omitted plain text with ellipses.
+
+    Source intervals are immutable. A retained interval either contains an
+    entire supported URL/Markdown atom, or only ordinary text; the result may
+    elide text before a link to preserve a usable link past the original cut.
+    """
+    if budget <= 0:
+        return ''
+    protected: list[tuple[int, int]] = []
+    for start, end in _feed_protected_spans(body):
+        if protected and start <= protected[-1][1]:
+            protected[-1] = (protected[-1][0], max(end, protected[-1][1]))
+        else:
+            protected.append((start, end))
+
+    protected_ends = {end for _start, end in protected}
+
+    def assemble(ranges: list[tuple[int, int]]) -> str:
+        """Mark holes without turning an omitted suffix into part of a URL."""
+        result: list[str] = []
+        position = 0
+        for start, end in sorted(ranges):
+            if start > position:
+                result.append(' …' if position in protected_ends else '…')
+            result.append(body[start:end])
+            position = end
+        if position < len(body):
+            result.append(' …' if position in protected_ends else '…')
+        return ''.join(result)
+
+    retained: list[tuple[int, int]] = []
+    # Reserve the earliest complete links before consuming the optional text
+    # budget. A too-large link is omitted instead of being sliced or shortened.
+    for span in protected:
+        candidate = retained + [span]
+        if _utf16_units(assemble(candidate)) <= budget:
+            retained.append(span)
+
+    # Plain segments never contain a protected atom, including atoms omitted
+    # above. Allocate their text from left to right after reserving links.
+    plain: list[tuple[int, int]] = []
+    position = 0
+    for start, end in protected:
+        if position < start:
+            plain.append((position, start))
+        position = end
+    if position < len(body):
+        plain.append((position, len(body)))
+
+    for start, end in plain:
+        if _utf16_units(assemble(retained + [(start, end)])) <= budget:
+            retained.append((start, end))
+            continue
+        # The final partial plain segment must fit without slicing a Unicode
+        # surrogate pair. Checking actual assembly also counts new ellipses.
+        lo, hi = start, end
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if _utf16_units(assemble(retained + [(start, mid)])) <= budget:
+                lo = mid
+            else:
+                hi = mid - 1
+        if lo > start:
+            retained.append((start, lo))
+
+    result = assemble(retained)
+    if _utf16_units(result) > budget:
+        raise ValueError('feed body exceeded its reserved Discord budget')
+    return result
+
+
+def render_feed_discord_message(*, header: str, body: str,
+                                footer: str | None = None) -> str:
+    """Reserve immutable identity while truncating only optional feed text.
+
+    Webhook roots already identify their author through the sender and carry
+    only a canonical source footer. Bot comments retain the author header and
+    marker; no other layout may have an empty header and empty footer.
+    """
+    head = str(header or '').strip()
+    if not head and not footer:
+        raise ValueError('feed message requires author header or source footer')
+    mandatory = (head + '\n\n' + footer) if head and footer else (head or footer or '')
+    if _utf16_units(mandatory) > DISCORD_MESSAGE_LIMIT:
+        raise ValueError('mandatory feed author/identity exceeds Discord limit')
+    clean_body = str(body or '').strip()
+    if not clean_body:
+        return mandatory
+    prefix = (head + '\n\n') if head else ''
+    suffix = ('\n\n' + footer) if footer else ''
+    formatted = prefix + clean_body + suffix
+    if _utf16_units(formatted) <= DISCORD_MESSAGE_LIMIT:
+        return formatted
+    # Links are reserved before plain text. This admits a middle omission
+    # where a crossing link is preserved instead of discarding the whole tail.
+    budget = DISCORD_MESSAGE_LIMIT - _utf16_units(prefix + suffix)
+    if budget <= 0:
+        return mandatory
+    result = prefix + _fit_feed_body(clean_body, budget) + suffix
+    if _utf16_units(result) > DISCORD_MESSAGE_LIMIT:
+        raise ValueError('feed message exceeds Discord length after truncation')
+    return result
+
+
+
+def feed_comment_content(*, actor_name: str, actor_id: str,
+                         object_id: str, body: str) -> str:
+    """Render one bot-owned federated comment with an exact header marker.
+
+    The marker is the only proof that a history entry belongs to this AP Note.
+    It must remain in the first paragraph during Create, Update and mirroring.
+    """
+    identity = validate_feed_object_url(object_id)
+    header = f'{feed_author_header(actor_name, actor_id)} [↗](<{identity}>)'
+    return render_feed_discord_message(header=header, body=body)
+
+
+def render_remote_community_root(*, actor_name: str, actor_id: str,
+                                 object_id: str, title: str | None,
+                                 body: str | None, external_url: str | None) -> str:
+    """Render one bot-owned remote Community starter for both Create and Edit.
+
+    Preserve the canonical Note ID as the complete final line, independently
+    of whether a link post has another source URL in its mutable body.
+    """
+    identity = validate_feed_object_url(object_id)
+    author = feed_author_header(actor_name, actor_id)
+    text = normalize_text(body)
+    if external_url and external_url != identity:
+        text = f'{text}\n\n{external_url}' if text else external_url
+    return render_feed_discord_message(
+        header=f'**{title or "Untitled Lemmy Post"}**\n\nAuthor: {author}',
+        body=text, footer=identity,
+    )
+
+
+def render_remote_community_comment(*, actor_name: str, actor_id: str,
+                                    object_id: str, body: str | None) -> str:
+    """Render the exact bot-only first-paragraph identity for Create and Edit."""
+    return feed_comment_content(actor_name=actor_name, actor_id=actor_id,
+                                object_id=object_id, body=normalize_text(body))
+
+
+def has_feed_comment_identity(content: str, object_id: str) -> bool:
+    """Match the exact, bridge-authored first-paragraph identity marker only.
+
+    A copied URL in the comment body, a nested quoted URL, or an AP ID that is
+    merely a prefix of another AP ID is not evidence of a successful POST.
+    """
+    marker = f' [↗](<{validate_feed_object_url(object_id)}>)'
+    first = str(content or '').split('\n\n', 1)[0]
+    return bool(first.startswith('`') and first.count('`') == 2
+                and first.endswith(marker) and first.index('`', 1) == len(first) - len(marker) - 1)
 
 
 def format_lemmy_post_for_discord(

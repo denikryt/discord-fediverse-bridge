@@ -19,6 +19,8 @@ from .user_profiles import UserProfileService
 from .user_actor_followers import UserActorFollowService
 from .user_actor_delivery import UserActorDeliveryService
 from .user_actor_delivery_worker import UserActorDeliveryWorker
+from .remote_person_follow_service import RemotePersonFollowService
+from .remote_person_discord_worker import RemotePersonRootDeliveryWorker
 from .personal_feed_conversations import PersonalFeedConversationRuntime
 from .personal_feed_discord_delivery_worker import PersonalFeedDiscordDeliveryWorker
 
@@ -48,14 +50,20 @@ class Runtime:
     user_actor_follow_service: UserActorFollowService
     user_actor_delivery_service: UserActorDeliveryService
     user_actor_delivery_worker: UserActorDeliveryWorker
+    remote_person_follow_service: RemotePersonFollowService
+    remote_person_root_delivery_worker: RemotePersonRootDeliveryWorker
     personal_feed_conversation_runtime: PersonalFeedConversationRuntime
     personal_feed_discord_delivery_worker: PersonalFeedDiscordDeliveryWorker
     deployment_state_lease: FileLock
+    community_group_view_delivery_worker: object | None = None
 
     async def close(self) -> None:
         """Close live-state owners before releasing the deployment generation lease."""
         # The ordering prevents restore from replacing DB/media paths while a
         # client, pooled connection, or HTTP reader can still use them.
+        if self.community_group_view_delivery_worker is not None:
+            await self.community_group_view_delivery_worker.stop()
+        await self.remote_person_root_delivery_worker.stop()
         await self.personal_feed_discord_delivery_worker.stop()
         await self.user_actor_delivery_worker.stop()
         await self.discord_oauth_client.close()

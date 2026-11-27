@@ -7,6 +7,8 @@ export interface BridgeObject {
   ap_id: string;
   author_name: string;
   body_markdown: string | null;
+  /** Presentation-only source for HTML and structured AP image attachments. */
+  media_source?: Record<string, unknown>;
   kind: "post" | "comment";
   lemmy_id: number | null;
   parent_ap_id: string | null;
@@ -41,6 +43,42 @@ export interface BridgeContentEvent {
   source_announce_id?: string | null;
 }
 
+/** Authenticated direct Person Note without a synthetic community or Lemmy ID. */
+export interface RemotePersonContentEvent {
+  event_type: "remote.person.created" | "remote.person.updated" | "remote.person.deleted";
+  delivery_id: string;
+  occurred_at: string;
+  actor_id: string;
+  verified_sender_actor_id: string;
+  source_activity_id: string | null;
+  source_activity_json: Record<string, unknown>;
+  object: {
+    ap_id: string;
+    author_name: string | null;
+    avatar_url: string | null;
+    body_markdown: string | null;
+    published_at: string | null;
+  };
+}
+
+/** Signed Note reply to a known Remote Person conversation, not a Group event. */
+export interface RemotePersonCommentEvent {
+  event_type: "remote.person.comment.created" | "remote.person.comment.updated" | "remote.person.comment.deleted";
+  delivery_id: string;
+  occurred_at: string;
+  actor_id: string;
+  verified_sender_actor_id: string;
+  source_activity_id: string | null;
+  source_activity_json: Record<string, unknown>;
+  object: {
+    ap_id: string;
+    parent_ap_id: string | null;
+    author_name: string | null;
+    body_markdown: string | null;
+    published_at: string | null;
+  };
+}
+
 // BridgeEvent stays as the content-event alias so the existing normalization
 // pipeline keeps its current naming while follow lifecycle uses a separate type.
 export type BridgeEvent = BridgeContentEvent;
@@ -68,7 +106,9 @@ export interface FollowAcceptedEvent {
   actor_id: string;
   community_actor_id: string;
   delivery_id: string;
-  event_type: "follow.accepted";
+  event_type: "follow.accepted" | "follow.rejected";
+  /** Authenticated local actor inbox path, not the remote activity's untrusted to. */
+  local_recipient_actor_id?: string | null;
   object: FollowLifecycleObject;
   occurred_at: string;
 }
@@ -77,6 +117,8 @@ export interface LocalFollowRequestedObject {
   follow_activity_id: string;
   remote_inbox_url: string;
   remote_shared_inbox_url: string | null;
+  /** Optional label from the same dereferenced and ID-matched Actor profile. */
+  remote_actor_display_name?: string | null;
 }
 
 export interface LocalFollowRequestedEvent {
@@ -106,6 +148,8 @@ export interface LocalUnfollowRequestedEvent {
 export type InternalBridgeEvent =
   | BridgeContentEvent
   | RemoteGroupAnnounceEvent
+  | RemotePersonContentEvent
+  | RemotePersonCommentEvent
   | FollowAcceptedEvent
   | LocalFollowRequestedEvent
   | LocalUnfollowRequestedEvent;
@@ -128,6 +172,7 @@ export interface RenderPersonalFeedRequest {
   kind?: "post" | "comment";
   inReplyToObjectId?: string | null;
   conversationRootObjectId?: string | null;
+  directPersonActorIds?: string[];
 }
 
 export interface RenderPersonalFeedResult {
@@ -205,7 +250,7 @@ export interface UpdateContentRequest {
   // actorUsername must match the original attributedTo — Lemmy enforces this
   // ownership check and rejects Updates from any other actor.
   actorUsername: string;
-  publicationContext?: "community" | "personal_feed";
+  publicationContext?: "community" | "personal_feed" | "remote_person_feed";
   communityActorUrl: string | null;
   conversationRootObjectId?: string | null;
   apObjectId: string;
@@ -225,12 +270,13 @@ export interface UpdateContentRequest {
   // Only immutable, Python-verified remote Group mutations use render-only.
   renderOnly?: boolean;
   softwareProfile?: "nodebb" | "threadiverse" | "bridge" | null;
+  directPersonActorIds?: string[];
 }
 
 export interface DeleteContentRequest {
   // actorUsername must match the original attributedTo — same ownership rule as Update.
   actorUsername: string;
-  publicationContext?: "community" | "personal_feed";
+  publicationContext?: "community" | "personal_feed" | "remote_person_feed";
   communityActorUrl: string | null;
   conversationRootObjectId?: string | null;
   apObjectId: string;
@@ -243,6 +289,7 @@ export interface DeleteContentRequest {
   // Only immutable, Python-verified remote Group mutations use render-only.
   renderOnly?: boolean;
   softwareProfile?: "nodebb" | "threadiverse" | "bridge" | null;
+  directPersonActorIds?: string[];
 }
 
 export interface AcceptLocalCommunityFollowRequest {

@@ -637,3 +637,256 @@ async def test_phase5_outbound_publish_does_not_create_post_link(
         comment_links = list(session.scalars(select(CommentLink)))
     assert len(post_links) == 0
     assert len(comment_links) == 0
+
+
+@pytest.mark.asyncio
+async def test_group_tombstone_after_channel_fetch_blocks_unstarted_create(tmp_path: Path) -> None:
+    """A Group Delete committed during preflight prevents a new Discord POST."""
+    from src.models import CommunityDiscordTargetClaim
+    from sqlalchemy import select
+    database = _database(tmp_path)
+    _accepted_subscription(database, channel_id=100)
+    forum = _fake_forum_channel(channel_id=100, thread_id=200, starter_message_id=300)
+    bot = _fake_bot(forum_channels={100: forum})
+    old_fetch = bot.fetch_forum_channel
+
+    async def delete_during_fetch(channel_id: int) -> object:
+        """Commit the tombstone while the network has not begun Create."""
+        fetched = await old_fetch(channel_id)
+        with database.immediate_session() as session:
+            group = session.scalar(select(CommunityThreadGroup))
+            group.view_state = 'deleted'
+            group.view_revision += 1
+        return fetched
+
+    from src.models import CommunityThreadGroup
+    bot.fetch_forum_channel = delete_during_fetch
+    runtime = _community_runtime(database, _publish_gateway(), bot=bot)
+    result = await runtime.handle_inbound_post(_fake_post_event(), SimpleNamespace(
+        database=database, bot=bot, community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database)))
+    forum.create_thread.assert_not_awaited()
+    with database.session() as session:
+        claim = session.scalar(select(CommunityDiscordTargetClaim))
+        assert claim.status == 'failed'
+    database.close()
+
+
+@pytest.mark.asyncio
+async def test_invalid_mandatory_root_footer_fails_before_discord_post(tmp_path: Path) -> None:
+    """A local renderer failure is proven unsent rather than unknown ACK."""
+    from src.models import CommunityDiscordTargetClaim
+    from sqlalchemy import select
+    database = _database(tmp_path)
+    _accepted_subscription(database, channel_id=100)
+    forum = _fake_forum_channel(channel_id=100, thread_id=200, starter_message_id=300)
+    bot = _fake_bot(forum_channels={100: forum})
+    runtime = _community_runtime(database, _publish_gateway(), bot=bot)
+    event = _fake_post_event(ap_id='https://remote.example/post/' + 'x' * 2100)
+    await runtime.handle_inbound_post(event, SimpleNamespace(
+        database=database, bot=bot, community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database)))
+    forum.create_thread.assert_not_awaited()
+    with database.session() as session:
+        claim = session.scalar(select(CommunityDiscordTargetClaim))
+        assert claim.status == 'failed' and claim.reconciliation_marker_version != 1
+    database.close()
+
+
+@pytest.mark.asyncio
+async def test_group_delete_during_thread_lookup_fences_unstarted_comment(tmp_path: Path) -> None:
+    """A subscribed reply cannot be posted after its Group tombstone committed."""
+    from sqlalchemy import select
+    from src.models import CommunityMessageGroup, CommunityDiscordTargetClaim
+    database = _database(tmp_path)
+    _accepted_subscription(database, channel_id=100)
+    _create_thread_group_for_inbound(database, channel_id=100, thread_id=200)
+    thread = _fake_thread(thread_id=200, sent_message_id=400)
+    bot = _fake_bot(threads={200: thread})
+    original = bot.get_thread_by_id
+
+    async def delete_during_lookup(thread_id: int) -> object:
+        """Commit the Group mutation while only the read-only GET has run."""
+        result = await original(thread_id)
+        with database.immediate_session() as session:
+            reply = session.scalar(select(CommunityMessageGroup))
+            reply.view_revision += 1
+            reply.view_state = 'deleted'
+        return result
+
+    bot.get_thread_by_id = delete_during_lookup
+    runtime = _community_runtime(database, _publish_gateway(), bot=bot)
+    await runtime.handle_inbound_comment(_fake_comment_event(), SimpleNamespace(
+        database=database, bot=bot, community_runtime=runtime,
+        bridge_policy_service=build_test_policy_service(database)))
+    thread.send.assert_not_awaited()
+    with database.session() as session:
+        claim = session.scalar(select(CommunityDiscordTargetClaim))
+        assert claim.status == 'failed'
+    database.close()
+
+@pytest.mark.asyncio
+async def test_live_group_update_during_root_preflight_sends_current_body(tmp_path: Path) -> None:
+    """A pre-POST Update refreshes the same claim instead of losing the target."""
+    from src.models import CommunityThreadGroup, CommunityDiscordTargetClaim
+    from sqlalchemy import select
+    db = _database(tmp_path)
+    _accepted_subscription(db, channel_id=100)
+    forum = _fake_forum_channel(channel_id=100, thread_id=200, starter_message_id=300)
+    bot = _fake_bot(forum_channels={100: forum})
+    original_fetch = bot.fetch_forum_channel
+
+    async def update_during_get(channel_id: int):
+        """Commit the new current Group view before Discord POST begins."""
+        result = await original_fetch(channel_id)
+        with db.immediate_session() as session:
+            group = session.scalar(select(CommunityThreadGroup))
+            group.view_revision = 1
+            group.display_object_json = {**group.display_object_json, 'body_markdown': 'Updated in preflight'}
+        return result
+
+    bot.fetch_forum_channel = update_during_get
+    runtime = _community_runtime(db, _publish_gateway(), bot=bot)
+    try:
+        result = await runtime.handle_inbound_post(_fake_post_event(), SimpleNamespace(
+            database=db, bot=bot, community_runtime=runtime,
+            bridge_policy_service=build_test_policy_service(db)))
+        assert result.status == 'processed'
+        assert forum.create_thread.await_count == 1
+        assert 'Updated in preflight' in forum.create_thread.await_args.kwargs['content']
+        assert 'Post body' not in forum.create_thread.await_args.kwargs['content']
+        with db.session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim))
+            assert claim.status == 'completed' and claim.applied_revision == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_live_group_update_during_comment_preflight_sends_current_body(tmp_path: Path) -> None:
+    """A parent lookup interrupted by a live Update still emits one current reply."""
+    from src.models import CommunityMessageGroup, CommunityDiscordTargetClaim
+    from sqlalchemy import select
+    db = _database(tmp_path)
+    _accepted_subscription(db, channel_id=100)
+    _create_thread_group_for_inbound(db, channel_id=100, thread_id=200)
+    thread = _fake_thread(thread_id=200, sent_message_id=400)
+    bot = _fake_bot(threads={200: thread})
+    original_get = bot.get_thread_by_id
+
+    async def update_during_lookup(thread_id: int):
+        """Advance the Group view while resolving the existing Discord thread."""
+        result = await original_get(thread_id)
+        with db.immediate_session() as session:
+            group = session.scalar(select(CommunityMessageGroup))
+            group.view_revision = 1
+            group.display_object_json = {**group.display_object_json, 'body_markdown': 'New reply preflight'}
+        return result
+
+    bot.get_thread_by_id = update_during_lookup
+    runtime = _community_runtime(db, _publish_gateway(), bot=bot)
+    try:
+        result = await runtime.handle_inbound_comment(_fake_comment_event(), SimpleNamespace(
+            database=db, bot=bot, community_runtime=runtime,
+            bridge_policy_service=build_test_policy_service(db)))
+        assert result.status == 'processed'
+        assert thread.send.await_count == 1
+        assert 'New reply preflight' in thread.send.await_args.args[0]
+        with db.session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim))
+            assert claim.status == 'completed' and claim.applied_revision == 1
+    finally:
+        db.close()
+
+@pytest.mark.asyncio
+async def test_expired_root_lookup_error_does_not_block_other_forum(tmp_path: Path) -> None:
+    """A late GET failure cannot resurrect an expired lease or stop healthy fanout."""
+    from sqlalchemy import select
+    from datetime import timedelta
+    from src.models import CommunityDiscordTargetClaim
+    from src.community_sync.group_view_delivery import CommunityGroupViewDeliveryWorker
+
+    db = _database(tmp_path)
+    try:
+        _accepted_subscription(db, channel_id=100)
+        _accepted_subscription(db, channel_id=101)
+        forum = _fake_forum_channel(channel_id=101, thread_id=500, starter_message_id=501)
+        bot = _fake_bot(forum_channels={101: forum})
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=bot,
+            policy_service=SimpleNamespace(federation_decision=lambda _actor: SimpleNamespace(allowed=True)))
+        original_fetch = bot.fetch_forum_channel
+
+        async def expired_lookup(channel_id: int):
+            """Allow the worker to expire the unsent claim before GET fails."""
+            if channel_id == 100:
+                with db.immediate_session() as session:
+                    claim = session.scalar(select(CommunityDiscordTargetClaim).where(
+                        CommunityDiscordTargetClaim.discord_channel_id == 100))
+                    claim.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+                await worker.drain_once()
+                raise TimeoutError('old Discord GET timed out')
+            return await original_fetch(channel_id)
+
+        bot.fetch_forum_channel = expired_lookup
+        runtime = _community_runtime(db, _publish_gateway(), bot=bot)
+        result = await runtime.handle_inbound_post(_fake_post_event(), SimpleNamespace(
+            database=db, bot=bot, community_runtime=runtime,
+            bridge_policy_service=build_test_policy_service(db)))
+        assert result.status == 'processed'
+        assert forum.create_thread.await_count == 1
+        with db.session() as session:
+            claims = {c.discord_channel_id: c for c in session.scalars(select(CommunityDiscordTargetClaim))}
+            assert claims[100].status == 'failed'
+            assert claims[101].status == 'completed'
+        assert len(db.discord_fanout_groups.get_thread_deliveries(
+            db.discord_fanout_groups.get_thread_group_by_ap_object(POST_AP_ID).id)) == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_expired_comment_lookup_error_does_not_block_other_thread(tmp_path: Path) -> None:
+    """A failed first reply GET must not prevent the second known thread's POST."""
+    from sqlalchemy import select
+    from datetime import timedelta
+    from src.models import CommunityDiscordTargetClaim
+    from src.community_sync.group_view_delivery import CommunityGroupViewDeliveryWorker
+
+    db = _database(tmp_path)
+    try:
+        _accepted_subscription(db, channel_id=100)
+        _accepted_subscription(db, channel_id=101)
+        root = _create_thread_group_for_inbound(db, channel_id=100, thread_id=200)
+        db.discord_fanout_groups.add_thread_delivery(
+            thread_group_id=root.id, discord_channel_id=101,
+            discord_thread_id=201, discord_starter_message_id=301, role='inbound')
+        thread = _fake_thread(thread_id=201, sent_message_id=401)
+        bot = _fake_bot(threads={201: thread})
+        worker = CommunityGroupViewDeliveryWorker(database=db, bot=bot,
+            policy_service=SimpleNamespace(federation_decision=lambda _actor: SimpleNamespace(allowed=True)))
+        original_get = bot.get_thread_by_id
+
+        async def expired_lookup(thread_id: int):
+            """Expire the original claim without permitting a Discord send."""
+            if thread_id == 200:
+                with db.immediate_session() as session:
+                    claim = session.scalar(select(CommunityDiscordTargetClaim).where(
+                        CommunityDiscordTargetClaim.discord_channel_id == 100))
+                    claim.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+                await worker.drain_once()
+                raise TimeoutError('old thread GET timed out')
+            return await original_get(thread_id)
+
+        bot.get_thread_by_id = expired_lookup
+        runtime = _community_runtime(db, _publish_gateway(), bot=bot)
+        result = await runtime.handle_inbound_comment(_fake_comment_event(), SimpleNamespace(
+            database=db, bot=bot, community_runtime=runtime,
+            bridge_policy_service=build_test_policy_service(db)))
+        assert result.status == 'processed'
+        assert thread.send.await_count == 1
+        with db.session() as session:
+            claims = {c.discord_channel_id: c for c in session.scalars(select(CommunityDiscordTargetClaim))}
+            assert claims[100].status == 'failed'
+            assert claims[101].status == 'completed'
+    finally:
+        db.close()

@@ -14,7 +14,7 @@ from src.discord_bot import BridgeBot
 from src.discord_event_router import DiscordEventRouter
 from src.discord_message_mutations import DiscordMessageMutationHandler
 from src.runtime_ports import DiscordMutationContext
-from src.fedify_gateway_client import RenderPersonalFeedResult
+from src.fedify_gateway_client import RenderPersonalFeedResult, ResolvedRemotePerson
 from src.models import MessageMapping, PublishedActivityObject, User
 from src.personal_feed_conversations import PersonalFeedConversationRuntime
 from src.personal_feeds import PersonalFeedService
@@ -106,10 +106,17 @@ class _Gateway:
     def __init__(self) -> None:
         self.requests: list[object] = []
 
+    async def resolve_remote_person(self, actor_id: str) -> ResolvedRemotePerson:
+        """Resolve a remote Person actor through the fake authenticated gateway."""
+        return ResolvedRemotePerson(actor_id, f"{actor_id}/inbox")
+
     async def render_personal_feed(self, request: object) -> RenderPersonalFeedResult:
         """Return one canonical Create(Note) result for persistence assertions."""
         self.requests.append(request)
+        actor_url = "https://bridge.example/actors/users/alice"
+        ids = request.direct_person_actor_ids
         activity = {
+            "cc": [actor_url, f"{actor_url}/followers", *ids],
             "id": request.activity_id,
             "type": "Create",
             "actor": "https://bridge.example/actors/users/alice",
@@ -117,6 +124,7 @@ class _Gateway:
                 "id": request.object_id,
                 "type": "Note",
                 "attributedTo": "https://bridge.example/actors/users/alice",
+                "cc": [f"{actor_url}/followers", *ids],
                 "content": request.body_markdown,
                 "inReplyTo": request.in_reply_to_object_id,
             },
@@ -141,7 +149,8 @@ def _conversation_runtime(
             check_global_discord_user=lambda _id: SimpleNamespace(banned=False)
         ),
         bridge_policy_service=SimpleNamespace(
-            is_discord_guild_allowed=lambda _id: True
+            is_discord_guild_allowed=lambda _id: True,
+            federation_decision=lambda _url: SimpleNamespace(allowed=True),
         ),
         fedify_origin="https://bridge.example",
         delivery_worker=SimpleNamespace(wake=lambda: None),
@@ -166,7 +175,8 @@ async def test_bridgebot_thread_create_adopts_personal_root_before_community(
         community_runtime=community,
         local_community_runtime=local,
         bridge_policy_service=SimpleNamespace(
-            is_discord_guild_allowed=lambda _id: True
+            is_discord_guild_allowed=lambda _id: True,
+            federation_decision=lambda _url: SimpleNamespace(allowed=True),
         ),
         personal_feed_service=service,
         personal_feed_conversation_runtime=conversation,
@@ -216,7 +226,8 @@ async def test_bridgebot_registered_reply_persists_once_and_duplicate_is_safe(
         community_runtime=SimpleNamespace(),
         local_community_runtime=SimpleNamespace(),
         bridge_policy_service=SimpleNamespace(
-            is_discord_guild_allowed=lambda _id: True
+            is_discord_guild_allowed=lambda _id: True,
+            federation_decision=lambda _url: SimpleNamespace(allowed=True),
         ),
         personal_feed_service=service,
         personal_feed_conversation_runtime=conversation,

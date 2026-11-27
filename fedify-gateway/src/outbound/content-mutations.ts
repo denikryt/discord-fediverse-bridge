@@ -36,7 +36,9 @@ export function verifyMutationIdentity(config: GatewayConfig, request: UpdateCon
   }
   const requestShape: Record<string, unknown> = {
     actorUsername: request.actorUsername,
+    publicationContext: request.publicationContext ?? "community",
     communityActorUrl: request.communityActorUrl,
+    conversationRootObjectId: request.conversationRootObjectId ?? null,
     apObjectId: request.apObjectId,
     kind: "kind" in request ? request.kind : null,
     title: "title" in request ? request.title ?? null : null,
@@ -63,6 +65,29 @@ export function verifyMutationIdentity(config: GatewayConfig, request: UpdateCon
   if (expectedActivityId !== new URL(request.activityId).href) throw new Error("mutation activity identity mismatch");
 }
 
+/** Person-authored Note contexts share AP serialization, not Discord routing. */
+function isPersonPublicationContext(context: string | undefined): boolean {
+  return context === "personal_feed" || context === "remote_person_feed";
+}
+
+/** Validate direct actor identifiers; never serialize inbox endpoints as recipients. */
+function verifiedDirectPersonAudience(request: UpdateContentRequest | DeleteContentRequest): URL[] {
+  const actors = request.directPersonActorIds ?? [];
+  if (!Array.isArray(actors) || (!isPersonPublicationContext(request.publicationContext) && actors.length)) {
+    throw new Error("direct Person audience belongs only to Person-authored notes");
+  }
+  if (JSON.stringify(actors) !== JSON.stringify([...new Set(actors)].sort())) {
+    throw new Error("direct Person audience must be unique and sorted");
+  }
+  return actors.map((actorId) => {
+    const actor = new URL(actorId);
+    if (actor.protocol !== "https:" || actor.username || actor.password || actor.hash || actor.href !== actorId) {
+      throw new Error("direct Person audience contains a noncanonical actor ID");
+    }
+    return actor;
+  });
+}
+
 function buildUpdateActivity(
   config: GatewayConfig,
   request: UpdateContentRequest,
@@ -83,7 +108,8 @@ function buildUpdateActivity(
     mediaType: "text/markdown",
   });
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
-  const personalFeed = request.publicationContext === "personal_feed";
+  const personalFeed = isPersonPublicationContext(request.publicationContext);
+  const directActors = verifiedDirectPersonAudience(request);
   const community = request.communityActorUrl == null ? null : new URL(request.communityActorUrl);
   if (!personalFeed && community == null) {
     throw new Error("community mutation requires communityActorUrl");
@@ -97,14 +123,14 @@ function buildUpdateActivity(
     : Temporal.Instant.from(request.mutationTimestamp);
 
   let object;
-  if (request.kind === "post" && request.softwareProfile !== "nodebb") {
+  if (request.kind === "post" && request.softwareProfile !== "nodebb" && !personalFeed) {
     object = new Page({
       id: objectId,
       name: request.title ?? "Untitled Discord Post",
       attribution: actorUri,
       ...(community == null ? {} : { audience: community }),
       tos: community == null ? [PUBLIC] : [PUBLIC, community],
-      ccs: personalFeed ? [followers] : [actorUri],
+      ccs: personalFeed ? [followers, ...directActors] : [actorUri],
       source,
       content: htmlContent,
       updated,
@@ -116,11 +142,12 @@ function buildUpdateActivity(
       attribution: actorUri,
       ...(community == null ? {} : { audience: community }),
       tos: community == null ? [PUBLIC] : [PUBLIC, community],
-      ccs: personalFeed ? [followers] : [actorUri],
+      ccs: personalFeed ? [followers, ...directActors] : [actorUri],
       source,
       content: htmlContent,
       updated,
-      ...(request.kind === "post" ? { name: request.title ?? "Untitled Discord Post" } : {}),
+      ...(request.kind === "post" && (!personalFeed || request.title != null)
+        ? { name: request.title ?? "Untitled Discord Post" } : {}),
     };
     if (request.inReplyToObjectId) {
       noteParams.replyTarget = new URL(request.inReplyToObjectId);
@@ -135,7 +162,7 @@ function buildUpdateActivity(
       actor: actorUri,
       object,
       tos: community == null ? [PUBLIC] : [PUBLIC, community],
-      ccs: [actorUri, followers],
+      ccs: [actorUri, followers, ...directActors],
     }),
   };
 }
@@ -155,7 +182,8 @@ function buildDeleteActivity(
       )
     : new URL(request.activityId);
   const PUBLIC = new URL("https://www.w3.org/ns/activitystreams#Public");
-  const personalFeed = request.publicationContext === "personal_feed";
+  const personalFeed = isPersonPublicationContext(request.publicationContext);
+  const directActors = verifiedDirectPersonAudience(request);
   const community = request.communityActorUrl == null ? null : new URL(request.communityActorUrl);
   if (!personalFeed && community == null) {
     throw new Error("community mutation requires communityActorUrl");
@@ -171,7 +199,7 @@ function buildDeleteActivity(
       actor: actorUri,
       object: new URL(request.apObjectId),
       tos: community == null ? [PUBLIC] : [PUBLIC, community],
-      ccs: [actorUri, followers],
+      ccs: [actorUri, followers, ...directActors],
     }),
   };
 }
@@ -244,7 +272,7 @@ export async function updateContent(
       activityJson: await serializeUpdate(builtUpdate.activity, request),
     };
   }
-  if (request.publicationContext === "personal_feed") {
+  if (isPersonPublicationContext(request.publicationContext)) {
     return {
       activityId: builtUpdate.activityId.href,
       objectId: request.apObjectId,
@@ -311,7 +339,7 @@ export async function deleteContent(
       activityJson: await renderPublicActivityJson(builtDelete.activity),
     };
   }
-  if (request.publicationContext === "personal_feed") {
+  if (isPersonPublicationContext(request.publicationContext)) {
     return {
       activityId: builtDelete.activityId.href,
       objectId: request.apObjectId,

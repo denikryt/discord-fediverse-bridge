@@ -297,6 +297,35 @@ def create_http_app(runtime: Runtime) -> FastAPI:
             from .community_sync.edit_delete import canonicalize_remote_delete_kind
             event = canonicalize_remote_delete_kind(runtime.database, event)
 
+        # Remote Group-view mutations have one indivisible canonical revision
+        # and terminal receipt transaction. The legacy preclaim path below is
+        # intentionally bypassed ONLY for already-proven remote Group objects;
+        # it would otherwise strand `in_progress` after a crash before commit.
+        from .community_sync.group_view_mutations import (
+            GroupViewMutationService, GroupMutationConflict, GroupMutationDenied,
+        )
+        if GroupViewMutationService.recognizes(event, runtime.database):
+            from .community_moderation import find_global_activitypub_actor_ban_for_event
+            if find_global_activitypub_actor_ban_for_event(event, runtime) is not None:
+                return {'status': 'skipped', 'outcome': 'ignored_actor_banned',
+                        'detail': 'actor is globally banned'}
+            service = GroupViewMutationService(runtime.database, runtime.bridge_policy_service)
+            try:
+                projection = await service.apply(event)
+            except GroupMutationConflict as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                    detail=str(exc)) from exc
+            except GroupMutationDenied as exc:
+                return {'status': 'skipped',
+                        'outcome': InboundActivityOutcome.IGNORED_UNAUTHORIZED_MUTATION.value,
+                        'detail': str(exc)}
+            if projection.status == 'processed':
+                worker = getattr(runtime, 'community_group_view_delivery_worker', None)
+                if worker is not None:
+                    worker.wake()
+            return {'status': projection.status, 'outcome': projection.outcome,
+                    'detail': projection.detail}
+
         # The original receipt remains immutable for a remote Group replay;
         # keep its result for the HTTP duplicate contract after revalidation.
         original_receipt = None

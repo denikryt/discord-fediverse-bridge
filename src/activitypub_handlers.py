@@ -16,6 +16,8 @@ from .community_moderation import (
 from .inbound_activity_outcomes import InboundActivityOutcome
 from .activitypub_models import (
     ActivityPubEvent,
+    RemotePersonContentEvent,
+    RemotePersonCommentEvent,
     BridgeGatewayEvent,
     FollowLifecycleEvent,
     LocalFollowRequestEvent,
@@ -79,6 +81,50 @@ async def dispatch_activitypub_event(
         if community_ban is not None:
             return _banned_actor_result(event, community_ban, scope="community")
 
+    # A signed public reply is routed only when its parent is a retained
+    # Remote Person object. The Group Announce path remains separate.
+    if isinstance(event, RemotePersonCommentEvent):
+        from .remote_person_comments import RemotePersonCommentService
+        result = RemotePersonCommentService(runtime.database).reserve(
+            event, guild_allowed=runtime.bridge_policy_service.snapshot().is_discord_guild_allowed,
+        )
+        if result.status in {'reserved', 'updated', 'deleted'}:
+            worker = getattr(runtime, 'remote_person_root_delivery_worker', None)
+            if worker is not None:
+                worker.wake()
+        # Deferred children and pre-Create tombstones have durable canonical
+        # evidence but intentionally no Discord side effect yet.
+        accepted = result.status in {'reserved', 'updated', 'deleted', 'pending_parent', 'deleted_before_create'}
+        return HandlerResult(
+            status='processed' if accepted else 'skipped',
+            outcome=InboundActivityOutcome.APPLIED if accepted else
+                InboundActivityOutcome.IGNORED_ALREADY_APPLIED if result.status in {'duplicate', 'stale'}
+                else InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+            detail=result.status,
+        )
+
+    # Signed remote Person roots have no Lemmy community identity. Their
+    # canonical object is reserved before any Discord side effects are allowed.
+    if isinstance(event, RemotePersonContentEvent):
+        from .remote_person_inbound import RemotePersonInboundService
+        result = RemotePersonInboundService(runtime.database).reserve(
+            event, guild_allowed=runtime.bridge_policy_service.snapshot().is_discord_guild_allowed,
+        )
+        # Wake the durable sender only after the canonical activity transaction
+        # commits; duplicates and rejected events have no new side effects.
+        if result.status in {'reserved', 'updated', 'deleted'}:
+            worker = getattr(runtime, 'remote_person_root_delivery_worker', None)
+            if worker is not None:
+                worker.wake()
+        return HandlerResult(
+            status='processed' if result.status in {'reserved', 'updated', 'deleted'} else 'skipped',
+            outcome=InboundActivityOutcome.APPLIED if result.status in {'reserved', 'updated', 'deleted'}
+                else InboundActivityOutcome.IGNORED_ALREADY_APPLIED
+                if result.status in {'duplicate', 'stale'}
+                else InboundActivityOutcome.IGNORED_UNMAPPED_CONTEXT,
+            detail=result.status,
+        )
+
     # Personal-feed object ownership is resolved before any community path.
     if _is_personal_feed_event(event):
         result = runtime.personal_feed_conversation_runtime.handle_inbound_event(event)
@@ -140,8 +186,8 @@ async def dispatch_activitypub_event(
         return await runtime.community_runtime.handle_inbound_comment_delete(
             event, runtime
         )
-    if event.event_type == "follow.accepted":
-        return await handle_follow_accepted(event, runtime)
+    if event.event_type in ("follow.accepted", "follow.rejected"):
+        return await handle_follow_lifecycle(event, runtime)
     if event.event_type == "local.follow_requested":
         if event.target_actor_kind == "user":
             return await runtime.user_actor_follow_service.handle_follow(
@@ -150,6 +196,7 @@ async def dispatch_activitypub_event(
                 remote_inbox_url=event.object.remote_inbox_url,
                 remote_shared_inbox_url=event.object.remote_shared_inbox_url,
                 follow_activity_id=event.object.follow_activity_id,
+                remote_actor_display_name=event.object.remote_actor_display_name,
             )
         return await runtime.local_community_runtime.handle_follow_request(
             local_community_actor_id=event.target_actor_id,
@@ -331,6 +378,38 @@ async def handle_comment_created(
             detail="no subscriptions for this community",
         )
     return await runtime.community_runtime.handle_inbound_comment(event, runtime)
+
+
+async def handle_follow_lifecycle(event: FollowLifecycleEvent, runtime: Runtime) -> HandlerResult:
+    """Match a user-owned signed Follow response before existing Group handling.
+
+    Each user owns an immutable activity ID and independent transport state;
+    acceptance never follows only from the remote actor's hostname.
+    """
+    original = runtime.database.remote_person_follows.get_follow_by_activity_id(
+        event.object.follow_activity_id
+    )
+    if original is not None:
+        decision = 'accepted' if event.event_type == 'follow.accepted' else 'rejected'
+        disposition = runtime.remote_person_follow_service.apply_remote_decision(
+            event.object.follow_activity_id, event.actor_id, decision,
+            local_recipient_actor_id=event.local_recipient_actor_id,
+        )
+        return HandlerResult(
+            status='processed' if disposition == 'applied' else 'skipped',
+            outcome=(InboundActivityOutcome.APPLIED if disposition == 'applied' else
+                     InboundActivityOutcome.IGNORED_ALREADY_APPLIED if disposition == 'duplicate'
+                     else InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW),
+            detail=f'user Person {decision}: {disposition}',
+        )
+    if event.event_type == 'follow.rejected':
+        # Bridge community lifecycle currently handles only Accept. A Reject
+        # with no matching user Follow must not change community state.
+        return HandlerResult(
+            status='skipped', outcome=InboundActivityOutcome.IGNORED_UNKNOWN_FOLLOW,
+            detail='unknown Person Follow rejection',
+        )
+    return await handle_follow_accepted(event, runtime)
 
 
 async def handle_follow_accepted(
@@ -589,7 +668,10 @@ def _is_local_community_target(event: ActivityPubEvent, runtime: Runtime) -> boo
 
 def _allowlist_subject(event: BridgeGatewayEvent, runtime: Runtime) -> str:
     """Return the remote URL whose instance should be checked against the allowlist."""
-    if hasattr(event, "target_actor_kind") or _is_personal_feed_event(event):
+    if (isinstance(event, (RemotePersonContentEvent, RemotePersonCommentEvent))
+            or hasattr(event, "target_actor_kind") or _is_personal_feed_event(event)):
+        # A directly signed remote Person Note has no community actor. Check
+        # federation allow/deny policy against the authenticated author.
         return getattr(event, "actor_id")
     if (
         hasattr(event, "community_actor_id")

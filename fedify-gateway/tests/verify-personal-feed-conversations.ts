@@ -106,7 +106,8 @@ async function main(): Promise<void> {
   // The gateway preserves the sender and stored owner separately so Python can
   // atomically reject the mismatch before mutating canonical state.
   assert.equal(wrongActor.actor_id, "https://remote.example/users/mallory");
-  assert.equal(wrongActor.object.attributed_to_actor_id, ACTOR);
+  assert.equal("attributed_to_actor_id" in wrongActor.object
+    ? wrongActor.object.attributed_to_actor_id : null, ACTOR);
 }
 
 main().catch((error) => {

@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ...models import Base
+from .v1_schema_reference import create_missing_v1_objects, original_v1_columns, original_v1_entries
 from ..migrations import _install_profile_media_triggers
 
 
@@ -56,7 +57,7 @@ def transfer_released_v0_tables(conn: Connection) -> None:
         conn.exec_driver_sql("PRAGMA legacy_alter_table=OFF")
         # New main ORM is valid historical transition target; CP05 upgrades it
         # further to the frozen v1 schema before the runner may stamp v1.
-        Base.metadata.create_all(conn)
+        create_missing_v1_objects(conn, include_indexes=False)
         conn.execute(text("""
             INSERT INTO users (id,discord_user_id,activitypub_username,actor_url,
                 inbox_url,outbox_url,followers_url,public_key_pem,private_key_pem,
@@ -234,10 +235,12 @@ def _rebuild_v1_table(conn: Connection, table_name: str) -> None:
     ))
     for (index_name,) in explicit_indexes:
         conn.exec_driver_sql(f'DROP INDEX "{index_name}"')
-    target = Base.metadata.tables[table_name]
-    target.create(conn)
+    # v2 ORM constraints must never contaminate the v1 transfer boundary.
+    ddl = next(statement for kind, name, _tbl, statement in original_v1_entries()
+               if kind == "table" and name == table_name)
+    conn.exec_driver_sql(ddl)
     old_columns = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({legacy})")}
-    names = [column.name for column in target.columns]
+    names = list(original_v1_columns(table_name))
     expressions = []
     for name in names:
         if name in old_columns:
@@ -250,6 +253,9 @@ def _rebuild_v1_table(conn: Connection, table_name: str) -> None:
         f"INSERT INTO {table_name} ({columns}) SELECT {select} FROM {legacy}"
     )
     conn.exec_driver_sql(f"DROP TABLE {legacy}")
+    for kind, name, tbl_name, statement in original_v1_entries():
+        if kind == "index" and tbl_name == table_name:
+            conn.exec_driver_sql(statement)
 
 
 def upgrade_v0_to_v1(
@@ -288,7 +294,7 @@ def upgrade_v0_to_v1(
 
     # `released_v0` copied new target tables during main compatibility transfer;
     # the known-main source needs the one concrete FK-owned claim table here.
-    Base.metadata.create_all(conn)
+    create_missing_v1_objects(conn)
     # Preserve source writer's profile-media checks, independently of whether
     # its profile-media table existed at v0 release time.
     _install_profile_media_triggers(conn)

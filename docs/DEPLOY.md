@@ -210,18 +210,32 @@ The bot enables Discord's Message Content intent in code. Keep that privileged i
 
 The bot also needs permission in each bound feed channel to view the channel, read message history, create public threads, send messages in threads, and manage only messages it previously rendered when applying remote Update/Delete. A retained inbound comment is not discarded when Discord is unavailable: the worker performs at most three Discord calls and then records a durable terminal failure. Moving or removing a binding intentionally prevents further synchronization to the old channel; retained history is not replayed into a replacement channel in Stage 8.
 
+
+## Remote Person Feed prerequisites and operations
+
+The bot needs the Message Content intent described above and these **effective** permissions in each assigned guild text channel: `View Channel`, `Read Message History`, `Send Messages`, `Manage Webhooks`, `Create Public Threads`, and `Send Messages in Threads`. `Read Message History` is also required in discussion threads for native Reply and reconciliation. A registered guild user with Discord `Manage Server` can run `/person-feed follow actor channel` and `/person-feed add-channel`; the remaining `/person-feed` operations are restricted to that user's follows through the existing DiscordOps policy.
+
+Top-level posts use an Incoming webhook created by the bot. Keep the original bot-created webhook and its token available in Discord: edits/deletes of previously delivered posts require the **same** webhook, not a replacement. If it was deleted or its token is unavailable, restore that webhook's credentials through an authorized Discord-side recovery process if possible; the bridge records a per-destination failure and will not substitute a new webhook to modify an old post. The token is never stored in SQLite. Check destination delivery states and worker logs when a Discord permission is revoked or a webhook disappears.
+
+If a POST or signed Follow/Undo has an ambiguous HTTP outcome, delivery state remains `uncertain`/`unknown`; it is not safe to reset and resend blindly. Confirm the remote event or original Discord message before explicitly recovering it. Removing the last accepted destination suppresses **unsubmitted** creates; an already-authorized in-flight send may finish. Existing Discord copies still receive authenticated edits/deletes after an unsubscribe. The bridge does not automatically republish historical posts when a new channel is assigned.
+
+## SQLite v2 upgrade
+
+The deployment now uses SQLite schema **v2**. Stop all older bridge processes and restart supervisors before upgrading, and take a complete verified backup of the database and profile media. With the exclusive deployment lock, startup validates the historical v0/v1 physical schema, creates a protected migration backup, and performs the v1→v2 rebuild of the publication-context tables inside one transaction. Fresh deployments create v2 directly. The runner verifies foreign keys, integrity, and the frozen v2 schema fingerprint before admitting the database. An unrecognized or partially migrated schema fails startup; do not run old binaries against a v2 database. Follow the restore procedure below if an upgrade fails.
+
+
 ## Stage 9 maintenance
 
 Use `bridge-user-deliveries` for bounded, database-only diagnostics and explicit retry resets. Bulk retry requires `--username --all-failed --limit` and processes at most 100 rows. Use `bridge-profile-media cleanup` with explicit database, media root, deployment lock, and media lock paths. A complete backup must contain both the SQLite database and profile-media volume; exporting a container image is not a volume backup.
 
-## Upgrading a pre-v1 SQLite deployment
+## Upgrading a pre-v1 SQLite deployment (via v1 to v2)
 
-The first versioned database release requires a strictly offline cutover:
+Legacy SQLite deployments require a strictly offline cutover:
 stop and disable **all** pre-v1 workers and their restart supervisors before
 starting new binaries. Do not mix old and new code against one SQLite file.
 The new startup performs source validation, a protected no-clobber migration
-backup and an atomic `0→1` upgrade under the existing exclusive deployment
-lock, then reacquires a shared lifetime lock and validates v1 read-only.
+backup and an atomic `0→1→2` upgrade under the existing exclusive deployment
+lock, then reacquires a shared lifetime lock and validates v2 read-only.
 Keep a verified backup of the database and profile media. Supported v0 schemas
 are the tagged v0.1.0 schema and the recognised main schema; an unknown schema
 stops startup without migration. The automatic migration backup is stored in
@@ -241,3 +255,125 @@ python -m src.db.backup restore \
 
 The restored database remains at v0. Start only the intended application
 version after confirming that all other database writers remain stopped.
+
+### Development v2 schema alignment for per-Follow/guild destinations
+
+The development v2 schema now rejects a second channel for the same
+`(follow_id, discord_guild_id)`. Separate follows may still share channels,
+and one Follow may have destinations in different guilds. Fresh v2 databases
+and the existing v1→v2 upgrade create this constraint automatically; schema
+version remains **2**. An older *physical* v2 database is **not** upgraded
+silently: startup rejects its outdated fingerprint.
+
+Before deploying this development revision to an existing v2 volume, **stop
+all writers**, obtain the owner's explicit authorization, and take a verified
+full database/media backup. Audit a read-only copy for conflicts:
+
+```sql
+SELECT follow_id, discord_guild_id, COUNT(*) AS assignments
+FROM remote_person_channel_assignments
+GROUP BY follow_id, discord_guild_id
+HAVING COUNT(*) > 1;
+```
+
+If rows are returned, resolve their destination ownership with the owner;
+never delete a user's assignment automatically. A verified updated-v2 DB with this index alone missing can be aligned
+explicitly; an older CP35-era v2 schema requires a separate, approved DB
+recreation or offline data-transfer procedure. The exact DDL is:
+
+```sql
+CREATE UNIQUE INDEX uq_remote_person_assignment_follow_guild ON remote_person_channel_assignments (follow_id, discord_guild_id);
+```
+
+The strict schema guard requires the exact name and SQL shape. Do not perform
+alignment or a reset as an application startup side effect.
+
+For a database that **already has the updated Group-view v2 columns** but
+lacks only the named Follow/guild index, the existing development-only CLI
+can produce a verified copy with the complete current v2 DDL:
+
+```bash
+python -m scripts.align_dev_v2_assignments \
+  --source /path/to/stopped-old-v2.db \
+  --output /path/to/aligned-v2.db \
+  --offline-confirmed
+```
+
+The command refuses conflicting Follow/guild rows and all structural drift
+outside the Follow-assignment table. Older CP21/CP32/CP35 v2 files lack the
+Group-view fields and are therefore rejected, not upgraded. The command
+writes only a new file, preserving all source rows and source bytes. It checks `PRAGMA user_version=2`, foreign keys, SQLite
+integrity and the complete v2 physical schema fingerprint before returning.
+Replace the development database only after inspecting the output and with
+all writers stopped; keep the original database and media backup for rollback.
+The alignment utility only changes the historical Follow/guild index. It
+**does not add Group-view fields**, so applying it to a CP35-era v2 file is
+not sufficient for admission by the updated v2 release. It is not an
+application migration step.
+
+After an explicitly approved offline schema operation, check
+`PRAGMA user_version` (=2), `PRAGMA integrity_check` (=ok),
+`PRAGMA foreign_key_check` (empty), and the complete updated `v2.sql`
+fingerprint. Verify a second startup is read-only.
+
+
+### Plan 146 — updated SQLite v2 Group-view schema
+
+The application schema version remains **2**. `src/db/schema_versions/v2.sql`
+contains the Group-view, receipt-fingerprint and typed claim-cursor fields.
+The Group root/comment rows now also have nullable `view_source_updated_at`:
+only a verified signed Update timestamp advances this clock; the older
+`view_updated_at` is a local commit time and cannot order remote revisions.
+A source Update without a timestamp may still advance the local revision,
+without overwriting the last verified source clock. For CP48/CP49 data,
+`view_updated_at` may contain a received-at timestamp; **do not copy it into
+`view_source_updated_at`** during a separately approved offline alignment.
+The automatic migration chain is exclusively `v0→v1→v2`, using the existing
+single-writer transaction, strict source DDL validation and protected backup.
+`v1→v2` rebuilds the four pre-existing Group/receipt/claim tables alongside
+the Remote Person additions. It preserves existing IDs and immutable Create
+snapshots, seeds display projections only from verified inbound Create data,
+and seeds completed revision cursors only for proven inbound Discord deliveries.
+Old ambiguous `unknown`/`claimed` attempts remain unresolved and are **never**
+re-posted on an assumption that the first Discord send failed.
+
+**Already stamped `user_version=2` databases with a previous physical v2
+schema are incompatible.** Startup rejects them without modifying the file:
+there is no automatic v2→v2 repair, v2→v3 migration or v3→v2 downgrade.
+In particular, the old assignment-index-only CLI does not make a CP35 v2
+file compatible with the new Group-view DDL. Keep an independently verified
+full database/media backup and obtain explicit owner authorization before
+recreating a development database or carrying out a separately reviewed
+offline data transfer. Do not simply change `PRAGMA user_version` or copy
+schema files over a populated database. Databases already stamped as v3 are
+also rejected; restore an appropriate source backup before migrating.
+
+For an existing **CP48/CP49 physical v2** development database (the exact
+snapshot without the two `view_source_updated_at` columns), first stop every
+Bridge/Gateway database writer, retain a verified full database/media backup,
+and obtain owner approval. Create a separate aligned copy with:
+
+```bash
+python -m scripts.align_dev_v2_group_view_timestamps \
+  --source /path/to/dev.sqlite3 \
+  --output /path/to/dev-aligned.sqlite3 \
+  --offline-confirmed
+```
+
+The command accepts only the exact CP49 v2 schema or already-current v2,
+checks the source's integrity/FKs, rebuilds the two Group tables with the exact
+current DDL, and verifies the entire resulting schema. All historical trusted
+source timestamps remain `NULL`, while Group revisions, Create snapshots,
+Discord IDs, and claims retain their existing values. The source is never
+modified and the output path must not exist. The command creates its
+temporary SQLite copy with mode `0600` and atomically refuses to overwrite an
+output path that appears during alignment. Verify the generated copy and
+replace a stopped development database only through the separately approved
+deployment/rollback procedure. Older CP35 v2 and `user_version=3` inputs are
+not accepted by this tool.
+
+For a clean DB or approved v0/v1 source, confirm `PRAGMA user_version=2`,
+`PRAGMA integrity_check=ok`, an empty `PRAGMA foreign_key_check`, and exact
+physical DDL agreement with `v2.sql`. A second startup must not write or
+create an additional migration backup. Inspect previous ambiguous claims and
+orphan Group receipts before any live rollout; do not declare them repaired.

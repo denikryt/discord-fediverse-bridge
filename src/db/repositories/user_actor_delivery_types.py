@@ -26,6 +26,8 @@ class ClaimedUserActorDelivery:
     claim_token: str
     # Verified original Group grants are separate from User Actor follower grants.
     direct_group_routes: tuple[tuple[str, str], ...] = ()
+    # The source-bound Person grant never masquerades as a follower incarnation.
+    direct_person_routes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -46,6 +46,24 @@ export function renderPersonalFeedCreate(
   if (Number.isNaN(parsedPublished.getTime()) || parsedPublished.toISOString() !== request.publishedAt) {
     throw new Error("publishedAt must be canonical UTC RFC3339 with milliseconds");
   }
+  // Direct Person targets come only from Python's verified actor/inbox proof.
+  // Keep the Note, Create, and durable public copies on the same actor audience.
+  const directActorIds = request.directPersonActorIds ?? [];
+  if (!Array.isArray(directActorIds) || (kind !== "comment" && directActorIds.length !== 0)) {
+    throw new Error("direct Person audience is only valid for comments");
+  }
+  for (const actorId of directActorIds) {
+    if (typeof actorId !== "string" || !actorId.startsWith("https://")) {
+      throw new Error("invalid canonical direct Person actor ID");
+    }
+    const parsed = new URL(actorId);
+    if (parsed.username || parsed.password || parsed.hash || parsed.href !== actorId || actorId === followersId) {
+      throw new Error("invalid canonical direct Person actor ID");
+    }
+  }
+  if (JSON.stringify(directActorIds) !== JSON.stringify([...new Set(directActorIds)].sort())) {
+    throw new Error("direct Person actor IDs must be unique and sorted");
+  }
   const object: Record<string, unknown> = {
     "@context": "https://www.w3.org/ns/activitystreams",
     type: "Note",
@@ -53,7 +71,7 @@ export function renderPersonalFeedCreate(
     url: request.objectId,
     attributedTo: actorId,
     to: [ACTIVITYSTREAMS_PUBLIC_IRI],
-    cc: [followersId],
+    cc: [followersId, ...directActorIds],
     source: { mediaType: "text/markdown", content: request.bodyMarkdown },
     content: request.bodyMarkdown
       .split(/\n\n+/)
@@ -72,7 +90,7 @@ export function renderPersonalFeedCreate(
       id: request.activityId,
       actor: actorId,
       to: [ACTIVITYSTREAMS_PUBLIC_IRI],
-      cc: [actorId, followersId],
+      cc: [actorId, followersId, ...directActorIds],
       object,
     },
   };

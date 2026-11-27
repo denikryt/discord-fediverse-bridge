@@ -70,7 +70,7 @@ export interface MessageMappingRow {
   activityId: string;
   objectId: string;
   actorUrl: string;
-  publicationContext: "community" | "personal_feed";
+  publicationContext: "community" | "personal_feed" | "remote_person_feed";
   communityActorUrl: string | null;
   discordGuildId: number | null;
   discordChannelId: number | null;
@@ -78,7 +78,7 @@ export interface MessageMappingRow {
 }
 
 export interface ConversationTargetRow {
-  publicationContext: "community" | "personal_feed";
+  publicationContext: "community" | "personal_feed" | "remote_person_feed";
   rootObjectId: string;
   actorId: string | null;
 }
@@ -86,7 +86,7 @@ export interface ConversationTargetRow {
 export interface PublishedActivityObjectRow {
   actorUsername: string;
   actorUrl: string;
-  publicationContext: "community" | "personal_feed";
+  publicationContext: "community" | "personal_feed" | "remote_person_feed";
   communityActorUrl: string | null;
   activityId: string;
   objectId: string;
@@ -97,6 +97,7 @@ export interface PublishedActivityObjectRow {
   /** Original serialized Create evidence, never inferred from mutable Follow. */
   originalObjectType?: "Note" | "Page" | null;
   originalObjectContext?: string | null;
+  directPersonActorIds?: string[];
   publishedAt: string;
   discordGuildId: number | null;
   discordChannelId: number | null;
@@ -441,6 +442,10 @@ function mapPublishedObject(row: Record<string, unknown>): PublishedActivityObje
     inReplyToObjectId: nullableString(row, "in_reply_to_object_id"),
     originalObjectType: originalPublishedType(row),
     originalObjectContext: nullableString(row, "original_object_context"),
+    directPersonActorIds: requiredArray(row, "direct_person_actor_ids").map((id) => {
+      if (typeof id !== "string") throw new Error("invalid direct Person audience");
+      return id;
+    }),
     publishedAt: requiredString(row, "published_at"),
     discordGuildId: nullableNumber(row, "discord_guild_id"),
     discordChannelId: nullableNumber(row, "discord_channel_id"),
@@ -484,11 +489,11 @@ function requiredNumber(row: Record<string, unknown>, key: string): number { con
 function nullableNumber(row: Record<string, unknown>, key: string): number | null { const value=row[key]; if(value===null||value===undefined)return null; if(typeof value!=="number")throw new Error(`Malformed Python bridge response field: ${key}`); return value; }
 function requiredArray(row: Record<string, unknown>, key: string): unknown[] { const value=row[key]; if(!Array.isArray(value))throw new Error(`Malformed Python bridge response field: ${key}`); return value; }
 function requiredKeyFormat(row: Record<string, unknown>, key: string): "jwk"|"pem" { const value=requiredString(row,key); if(value!=="jwk"&&value!=="pem")throw new Error(`Malformed Python bridge response field: ${key}`); return value; }
-function optionalPublicationContext(record: Record<string, unknown>, key: string): "community" | "personal_feed" {
+function optionalPublicationContext(record: Record<string, unknown>, key: string): "community" | "personal_feed" | "remote_person_feed" {
   const raw = record[key];
   if (raw == null) return "community";
   const value = requiredString(record, key);
-  if (value !== "community" && value !== "personal_feed") {
+  if (value !== "community" && value !== "personal_feed" && value !== "remote_person_feed") {
     throw new Error(`${key} must be a supported publication context`);
   }
   return value;

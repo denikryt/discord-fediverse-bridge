@@ -24,6 +24,7 @@ async function main(): Promise<void> {
     getActor: async () => ({
       id: new URL(`${REMOTE_ORIGIN}users/bob`),
       inboxId: new URL(`${REMOTE_ORIGIN}users/bob/inbox`),
+      preferredUsername: "nachitima",
       endpoints: { sharedInbox: `${REMOTE_ORIGIN}inbox` },
     }),
   });
@@ -36,6 +37,7 @@ async function main(): Promise<void> {
   assert.equal(event.object.follow_activity_id, `${REMOTE_ORIGIN}activities/follow/1`);
   assert.equal(event.object.remote_inbox_url, `${REMOTE_ORIGIN}users/bob/inbox`);
   assert.equal(event.object.remote_shared_inbox_url, `${REMOTE_ORIGIN}inbox`);
+  assert.equal(event.object.remote_actor_display_name, "nachitima");
 
 
   console.log("verify:user-actor-follow passed");

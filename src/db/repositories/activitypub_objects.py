@@ -107,6 +107,34 @@ class ActivityPubObjectRepository(BaseRepository):
                 raise ValueError("Malformed immutable published Create") from exc
             return obj["type"], context
 
+    def get_original_direct_person_actor_ids(
+        self, published_object: PublishedActivityObject,
+    ) -> list[str]:
+        """Reconstruct only the original verified direct Person audience."""
+        with self.session() as session:
+            source = session.scalar(select(UserActorOutboundSource).where(
+                UserActorOutboundSource.published_object_id == published_object.id,
+                UserActorOutboundSource.source_kind == "content_create",
+                UserActorOutboundSource.activity_id == published_object.activity_id,
+            ))
+            if source is None or source.activity_json is None:
+                return []
+            snapshot = json.loads(source.snapshot_json)
+            activity = json.loads(source.activity_json)
+            if "directPersonRecipients" not in snapshot:
+                return []
+            recipients = snapshot["directPersonRecipients"]
+            if not isinstance(recipients, list):
+                raise ValueError("invalid original direct Person recipients")
+            actor_ids = [r["actorId"] for r in recipients]
+            if (sorted(set(actor_ids)) != actor_ids
+                    or activity.get("cc") != [published_object.actor_url, f"{published_object.actor_url}/followers", *actor_ids]
+                    or not isinstance(activity.get("object"), dict)
+                    or activity["object"].get("cc") != [f"{published_object.actor_url}/followers", *actor_ids]):
+                # Do not invent recipient proof when existing JSON conflicts.
+                raise ValueError("original direct Person audience conflicts with canonical Create")
+            return actor_ids
+
     def get_published_activity_object_by_object_id(
         self, object_id: str
     ) -> PublishedActivityObject | None:

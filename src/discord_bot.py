@@ -59,6 +59,7 @@ class BridgeBot(discord.Client):
         # Keep the current runtime reachable for edit/delete paths that still
         # belong only to the remote-subscription mode today.
         self.community_runtime = event_router.community_runtime
+        self.remote_person_follow_service = None  # bound by the composition root before setup_hook
         self.user_ban_service = user_ban_service or UserBanService(
             database=database, settings=settings
         )
@@ -75,12 +76,15 @@ class BridgeBot(discord.Client):
         # binds instead of raw attribute writes from the composition root.
         self._message_mutation_handler: DiscordMessageMutationHandler | None = None
         self._personal_feed_delivery_worker: object | None = None
+        self._remote_person_root_worker: object | None = None
+        self._community_group_view_worker: object | None = None
 
     async def setup_hook(self) -> None:
         # setup_hook runs before the bot connects, making it the right place to
         # register slash commands and sync the tree with Discord.
         from .commands import (
             account_settings,
+            person_feed,
             ban_user,
             bridge_policy,
             create_community,
@@ -148,6 +152,10 @@ class BridgeBot(discord.Client):
                 self.user_profile_service,
                 self.personal_feed_service,
             )
+        person_feed.register(
+            self.tree, self.database, self.settings, self.bridge_policy_service,
+            self.remote_person_follow_service,
+        )
         await self.tree.sync()
 
     async def on_ready(self) -> None:
@@ -158,6 +166,8 @@ class BridgeBot(discord.Client):
         # fetch channels. Starting earlier would consume retry attempts during
         # normal connection establishment rather than actual delivery failures.
         self._require_personal_feed_delivery_worker().start()
+        self._require_remote_person_root_worker().start()
+        self._require_community_group_view_worker().start()
         # Refresh last-known Discord labels at startup so old rows and renamed
         # guilds/forums converge without live lookups during dashboard requests.
         refresh_discord_directory_from_bot(self.database, self)
@@ -260,7 +270,8 @@ class BridgeBot(discord.Client):
         if message.channel.parent_id is None:
             return
         if not (
-            self.event_router.is_personal_feed_thread(message.channel.id)
+            self.event_router.is_remote_person_thread(message.channel.id)
+            or self.event_router.is_personal_feed_thread(message.channel.id)
             or self.event_router.is_remote_subscription_forum(message.channel.parent_id)
             or self.event_router.is_local_community_forum(message.channel.parent_id)
         ):
@@ -322,6 +333,30 @@ class BridgeBot(discord.Client):
         if worker is None:
             raise RuntimeError("Personal-feed Discord delivery worker is not configured")
         return worker
+
+    def bind_remote_person_root_worker(self, worker: object) -> None:
+        """Configure the one ready-gated webhook root sender at composition time."""
+        if self._remote_person_root_worker is not None:
+            raise RuntimeError("Remote Person root worker is already bound")
+        self._remote_person_root_worker = worker
+
+    def _require_remote_person_root_worker(self) -> object:
+        """Fail early if incoming Person roots have no Discord delivery owner."""
+        if self._remote_person_root_worker is None:
+            raise RuntimeError("Remote Person root worker is not configured")
+        return self._remote_person_root_worker
+
+    def bind_community_group_view_worker(self, worker: object) -> None:
+        """Bind the one Group-view reconciliation owner before Discord connects."""
+        if self._community_group_view_worker is not None:
+            raise RuntimeError('Community Group-view worker is already configured')
+        self._community_group_view_worker = worker
+
+    def _require_community_group_view_worker(self) -> object:
+        """Fail startup if Group mutation receipts have no Discord retry owner."""
+        if self._community_group_view_worker is None:
+            raise RuntimeError('Community Group-view worker is not configured')
+        return self._community_group_view_worker
 
     async def fetch_message_state(
         self, channel_id: int, message_id: int

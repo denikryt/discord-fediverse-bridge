@@ -249,6 +249,7 @@ def test_delivered_update_reuses_discord_message_and_delete_becomes_due() -> Non
     )
     assert updated.status == "accepted"
     claim = database.personal_feed_conversations.claim_due()[0]
+    assert claim.actor_id == "https://remote.example/actors/users/bob"
     assert claim.discord_message_id == 501
     assert claim.deleted is False
     database.personal_feed_conversations.record_discord_attempt(

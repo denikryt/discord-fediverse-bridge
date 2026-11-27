@@ -5,6 +5,7 @@
  * existing wire payloads and delegate to gateway outbound use cases unchanged.
  */
 import type { Hono } from "hono";
+import { resolveRemotePersonForFollow } from "../outbound/user-person-follow.js";
 
 import type { GatewayConfig } from "../config.js";
 import type { createGatewayFederation } from "../federation.js";
@@ -38,6 +39,24 @@ export function registerInternalPublishRoutes(
 ): void {
   const { config, fedify } = dependencies;
 
+  app.post("/resolve-remote-person", async (context) => {
+    // Resolve through Fedify rather than trusting an ActivityPub body's
+    // attributedTo or a cache entry whose inbox may have changed.
+    if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
+      return context.json({ error: "invalid authorization" }, { status: 401 });
+    }
+    const payload = (await context.req.json()) as { actorId?: unknown };
+    if (typeof payload.actorId !== "string") {
+      return context.json({ error: "actorId required" }, { status: 400 });
+    }
+    try {
+      const { actorId, inboxUrl } = await resolveRemotePersonForFollow(fedify, config, payload.actorId);
+      return context.json({ actorId, inboxUrl });
+    } catch (error) {
+      return context.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+    }
+  });
+
   app.post("/render-personal-feed", async (context) => {
     if (!hasValidInternalAuthorization(config, context.req.header("Authorization") ?? null)) {
       return context.json({ error: "invalid authorization" }, { status: 401 });
@@ -50,7 +69,8 @@ export function registerInternalPublishRoutes(
       typeof payload.objectId !== "string" ||
       typeof payload.bodyMarkdown !== "string" ||
       typeof payload.publishedAt !== "string" ||
-      (payload.kind !== undefined && payload.kind !== "post" && payload.kind !== "comment")
+      (payload.kind !== undefined && payload.kind !== "post" && payload.kind !== "comment") ||
+      (payload.directPersonActorIds !== undefined && (!Array.isArray(payload.directPersonActorIds) || !payload.directPersonActorIds.every((id) => typeof id === "string")))
     ) {
       return context.json({ error: "invalid personal-feed render request" }, { status: 400 });
     }
@@ -180,9 +200,11 @@ export function registerInternalPublishRoutes(
       typeof payload.actorUsername !== "string" ||
       (payload.publicationContext !== undefined &&
         payload.publicationContext !== "community" &&
-        payload.publicationContext !== "personal_feed") ||
-      (payload.publicationContext !== "personal_feed" && typeof payload.communityActorUrl !== "string") ||
-      (payload.publicationContext === "personal_feed" && payload.communityActorUrl != null) ||
+        payload.publicationContext !== "personal_feed" &&
+        payload.publicationContext !== "remote_person_feed") ||
+      (payload.publicationContext === "community" || payload.publicationContext === undefined
+        ? typeof payload.communityActorUrl !== "string"
+        : payload.communityActorUrl != null) ||
       typeof payload.apObjectId !== "string" ||
       (payload.kind !== "post" && payload.kind !== "comment") ||
       typeof payload.bodyMarkdown !== "string"
@@ -217,6 +239,9 @@ export function registerInternalPublishRoutes(
         nextRevision: typeof payload.nextRevision === "number" ? payload.nextRevision : null,
         renderOnly: payload.renderOnly === true,
         softwareProfile: payload.softwareProfile === "nodebb" || payload.softwareProfile === "bridge" || payload.softwareProfile === "threadiverse" ? payload.softwareProfile : null,
+        directPersonActorIds: Array.isArray(payload.directPersonActorIds)
+          ? payload.directPersonActorIds.filter((id): id is string => typeof id === "string")
+          : [],
       });
       return context.json(result);
     } catch (error) {
@@ -236,9 +261,11 @@ export function registerInternalPublishRoutes(
       typeof payload.actorUsername !== "string" ||
       (payload.publicationContext !== undefined &&
         payload.publicationContext !== "community" &&
-        payload.publicationContext !== "personal_feed") ||
-      (payload.publicationContext !== "personal_feed" && typeof payload.communityActorUrl !== "string") ||
-      (payload.publicationContext === "personal_feed" && payload.communityActorUrl != null) ||
+        payload.publicationContext !== "personal_feed" &&
+        payload.publicationContext !== "remote_person_feed") ||
+      (payload.publicationContext === "community" || payload.publicationContext === undefined
+        ? typeof payload.communityActorUrl !== "string"
+        : payload.communityActorUrl != null) ||
       typeof payload.apObjectId !== "string"
     ) {
       return context.json(
@@ -264,6 +291,9 @@ export function registerInternalPublishRoutes(
         nextRevision: typeof payload.nextRevision === "number" ? payload.nextRevision : null,
         renderOnly: payload.renderOnly === true,
         softwareProfile: payload.softwareProfile === "nodebb" || payload.softwareProfile === "bridge" || payload.softwareProfile === "threadiverse" ? payload.softwareProfile : null,
+        directPersonActorIds: Array.isArray(payload.directPersonActorIds)
+          ? payload.directPersonActorIds.filter((id): id is string => typeof id === "string")
+          : [],
       });
       return context.json(result);
     } catch (error) {

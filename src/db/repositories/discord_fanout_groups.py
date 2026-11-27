@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -30,6 +30,8 @@ class RemoteTargetReservation:
 
     state: str
     attempt_id: str | None = None
+    view_revision: int | None = None
+    display_object_json: dict | None = None
 
 
 class DiscordFanoutGroupRepository(BaseRepository):
@@ -71,6 +73,27 @@ class DiscordFanoutGroupRepository(BaseRepository):
             session.add(group)
             session.flush()
             return group
+
+    def get_source_starter_delivery_by_message(
+        self, message_id: int
+    ) -> CommunityThreadGroupDelivery | None:
+        """Admit only the native source starter of a retained Community root.
+
+        A mirrored/inbound starter has the same shape of Discord ID but must
+        never authorize a local Person Update. Match both source fields and
+        the delivery role instead of assuming any thread starter is the owner.
+        """
+        with self.session() as session:
+            return session.scalar(select(CommunityThreadGroupDelivery).join(
+                CommunityThreadGroup,
+                CommunityThreadGroup.id == CommunityThreadGroupDelivery.thread_group_id,
+            ).where(
+                CommunityThreadGroupDelivery.discord_starter_message_id == message_id,
+                CommunityThreadGroupDelivery.role == 'source',
+                CommunityThreadGroup.source_starter_message_id == message_id,
+                CommunityThreadGroup.source_thread_id == CommunityThreadGroupDelivery.discord_thread_id,
+                CommunityThreadGroup.source_channel_id == CommunityThreadGroupDelivery.discord_channel_id,
+            ))
 
     def get_thread_group_by_source_thread(
         self, source_thread_id: int
@@ -347,6 +370,7 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 community_actor_id=community_actor_id, ap_object_id=ap_object_id,
                 ap_activity_id=ap_activity_id, source_owner_actor_id=source_owner_actor_id,
                 inbound_create_snapshot_json=first_object_json,
+                display_object_json=first_object_json,
                 source_channel_id=None, source_thread_id=None, source_starter_message_id=None,
             )
             session.add(group)
@@ -386,12 +410,17 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 community_actor_id=community_actor_id, ap_object_id=ap_object_id,
                 ap_activity_id=ap_activity_id, source_owner_actor_id=source_owner_actor_id,
                 inbound_create_snapshot_json=first_object_json,
+                display_object_json=first_object_json,
                 thread_group_id=thread_group_id, parent_message_group_id=parent_message_group_id,
                 source_channel_id=None, source_thread_id=None, source_message_id=None,
             )
             session.add(group)
             session.flush()
             return group
+
+    # Existing claim clocks distinguish preflight from a possibly begun POST.
+    # No new schema owner is required for an interrupted read-only Discord GET.
+    PREFLIGHT_LEASE = timedelta(minutes=2)
 
     def reserve_remote_target(
         self, *, kind: str, group_id: int, discord_channel_id: int
@@ -424,6 +453,12 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 ChannelCommunitySubscription.status == "accepted",
             )) is None:
                 return RemoteTargetReservation("not_subscribed")
+            # An authenticated Group tombstone fences even a newly subscribed
+            # destination. A Person Note returning HTTP 200 cannot override it.
+            if group.view_state == "deleted":
+                return RemoteTargetReservation("deleted")
+            if group.display_object_json is None:
+                return RemoteTargetReservation("unverified_view")
             if session.scalar(select(delivery.id).where(
                 delivery_fk == group_id, delivery.discord_channel_id == discord_channel_id
             )) is not None:
@@ -443,10 +478,78 @@ class DiscordFanoutGroupRepository(BaseRepository):
                 )
                 session.add(claim)
             claim.attempt_id = attempt_id
-            claim.attempt_started_at = datetime.now(timezone.utc)
+            # The initial reservation only authorizes read-only Discord lookup.
+            # Mark the possible POST boundary in confirm_remote_target_pre_send;
+            # otherwise a slow preflight can be mistaken for a lost ACK.
+            claim.attempt_started_at = None
+            claim.next_attempt_at = datetime.now(timezone.utc) + self.PREFLIGHT_LEASE
+            claim.last_error = None
             claim.status = "claimed"
+            claim.reserved_view_revision = group.view_revision
+            claim.reconciliation_marker_version = 1
             session.flush()
-            return RemoteTargetReservation("reserved", attempt_id)
+            return RemoteTargetReservation(
+                "reserved", attempt_id, group.view_revision, dict(group.display_object_json)
+            )
+
+    def confirm_remote_target_pre_send(
+        self, *, kind: str, group_id: int, discord_channel_id: int, attempt_id: str,
+        prepared_revision: int | None = None,
+    ) -> RemoteTargetReservation | None:
+        """Refresh this attempt to the current live Group view before REST.
+
+        Read-only Discord lookups can race with a signed Group Update. The same
+        claim may use its new live revision without another Create or token;
+        a tombstone or cancelled binding still fences an unstarted POST.
+        """
+        if kind not in ("post", "comment"):
+            raise ValueError("invalid remote target kind")
+        group_fk = (CommunityDiscordTargetClaim.thread_group_id if kind == "post"
+                    else CommunityDiscordTargetClaim.message_group_id)
+        with self.immediate_session() as session:
+            claim = session.scalar(select(CommunityDiscordTargetClaim).where(
+                group_fk == group_id,
+                CommunityDiscordTargetClaim.discord_channel_id == discord_channel_id,
+                CommunityDiscordTargetClaim.kind == kind,
+                CommunityDiscordTargetClaim.attempt_id == attempt_id,
+                CommunityDiscordTargetClaim.status == "claimed",
+            ))
+            if claim is None or claim.attempt_started_at is not None:
+                # The token crosses the Discord POST boundary only once.
+                # A repeated confirm cannot authorize an accidental second POST.
+                return None
+            group = session.get(CommunityThreadGroup if kind == "post"
+                                else CommunityMessageGroup, group_id)
+            still_allowed = (group is not None and group.view_state == "live"
+                and isinstance(group.display_object_json, dict)
+                and session.scalar(select(ChannelCommunitySubscription.id).where(
+                    ChannelCommunitySubscription.discord_channel_id == discord_channel_id,
+                    ChannelCommunitySubscription.lemmy_community_actor_id == group.community_actor_id,
+                    ChannelCommunitySubscription.status == "accepted",
+                )) is not None)
+            if not still_allowed:
+                # This attempt never crossed the POST boundary. Unlike a lost
+                # acknowledgment, its failure is proven and can be re-reserved
+                # if a legitimate live placement is later admitted.
+                claim.status = "failed"
+                claim.reconciliation_marker_version = None
+                return None
+            # Media downloads are still preflight I/O. If the view changed,
+            # refresh the same token without authorizing a POST with old files.
+            if prepared_revision is not None and group.view_revision != prepared_revision:
+                return RemoteTargetReservation(
+                    "refresh", attempt_id, group.view_revision, dict(group.display_object_json)
+                )
+            # A newer live Update is not a reason to discard a valid target.
+            # Persist exactly the content/revision that the caller will render.
+            claim.reserved_view_revision = group.view_revision
+            # This committed timestamp means a POST *may* have begun. From now
+            # on a lost callback must be reconciled, never blindly re-sent.
+            claim.attempt_started_at = datetime.now(timezone.utc)
+            claim.next_attempt_at = None
+            return RemoteTargetReservation(
+                "reserved", attempt_id, group.view_revision, dict(group.display_object_json)
+            )
 
     def finish_remote_target(
         self, *, kind: str, group_id: int, discord_channel_id: int, attempt_id: str,
@@ -468,17 +571,40 @@ class DiscordFanoutGroupRepository(BaseRepository):
             session.add(delivery)
             session.flush()
             claim.status = "completed"
+            # The source revision reserved before REST is the maximum proven
+            # on this Discord copy. A concurrent mutation remains outstanding.
+            claim.applied_revision = claim.reserved_view_revision
+            claim.mutation_attempt_token = None
+            claim.next_attempt_at = None
 
     def mark_remote_target(
         self, *, kind: str, group_id: int, discord_channel_id: int,
         attempt_id: str, status: str
-    ) -> None:
-        """Save a proven pre-send failure or an ambiguous external result."""
+    ) -> bool:
+        """Record a current attempt's outcome; ignore callbacks from expired leases.
+
+        The worker may expire an unsent preflight while Discord GET is still
+        pending. Its late failure must not abort sibling fanout or modify the
+        replacement attempt, which owns a different CAS token.
+        """
         if status not in ("failed", "unknown"):
             raise ValueError("invalid target failure status")
         with self.immediate_session() as session:
-            claim = self._claimed_target(session, kind, group_id, discord_channel_id, attempt_id)
+            try:
+                claim = self._claimed_target(session, kind, group_id, discord_channel_id, attempt_id)
+            except RemoteCommunityGroupConflict:
+                # No matching live attempt means this callback has no authority
+                # to change the durable target; keep the newest claim intact.
+                return False
             claim.status = status
+            # A definitive failed preflight or an ambiguous POST result must
+            # not inherit the preparation deadline as a retry/backoff timer.
+            claim.next_attempt_at = None
+            if status == "failed":
+                # A proven pre-send failure never has a Discord history marker
+                # worth reconciling; the next reservation builds a fresh one.
+                claim.reconciliation_marker_version = None
+            return True
 
     @staticmethod
     def _claimed_target(session, kind: str, group_id: int, channel_id: int, attempt_id: str):
@@ -486,7 +612,8 @@ class DiscordFanoutGroupRepository(BaseRepository):
         column = CommunityDiscordTargetClaim.thread_group_id if kind == "post" else CommunityDiscordTargetClaim.message_group_id
         claim = session.scalar(select(CommunityDiscordTargetClaim).where(
             column == group_id, CommunityDiscordTargetClaim.discord_channel_id == channel_id,
-            CommunityDiscordTargetClaim.kind == kind, CommunityDiscordTargetClaim.status == "claimed",
+            CommunityDiscordTargetClaim.kind == kind,
+            CommunityDiscordTargetClaim.status.in_(("claimed", "unknown")),
             CommunityDiscordTargetClaim.attempt_id == attempt_id,
         ))
         if claim is None:

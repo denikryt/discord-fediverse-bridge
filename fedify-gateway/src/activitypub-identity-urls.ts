@@ -7,6 +7,8 @@
  * not cross into identity construction.
  */
 
+import { createHash } from "node:crypto";
+
 export type LocalActorKind = "service" | "user" | "community";
 
 export interface ActorAddress {
@@ -217,6 +219,21 @@ export function buildUserDeletePostActivityId(origin: string | URL, username: st
 /** Build a typed local user Delete(Comment) activity id. */
 export function buildUserDeleteCommentActivityId(origin: string | URL, username: string, activityId: string): URL {
   return childUrl(userRoot(origin, username), `/activities/delete/comments/${segment(activityId)}`);
+}
+
+/** Build an immutable Follow ID owned by an individual local user Person. */
+export function buildUserFollowActivityId(origin: string | URL, username: string, activityId: string): URL {
+  return childUrl(userRoot(origin, username), `/activities/follow/${segment(activityId)}`);
+}
+
+/** Derive an idempotent Undo ID from a previously reserved user Follow ID. */
+export function buildUserUndoFollowActivityId(origin: string | URL, username: string, followId: string): URL {
+  const prefix = `${userRoot(origin, username).href}/activities/follow/`;
+  if (!followId.startsWith(prefix) || !followId.slice(prefix.length) || followId.includes('?', prefix.length) || followId.includes('#', prefix.length)) {
+    throw new Error('Undo must refer to an original Follow owned by this user');
+  }
+  const digest = createHash("sha256").update(followId, "utf8").digest("hex");
+  return childUrl(userRoot(origin, username), `/activities/undo/follows/${digest}`);
 }
 
 /** Build a typed local user Accept(Follow) activity id. */

@@ -31,7 +31,7 @@ export interface UserActorIdentityView {
 export interface PublishedActivityObjectView {
   actorUsername: string;
   actorUrl: string;
-  publicationContext: "community" | "personal_feed";
+  publicationContext: "community" | "personal_feed" | "remote_person_feed";
   communityActorUrl: string | null;
   activityId: string;
   objectId: string;
@@ -41,6 +41,7 @@ export interface PublishedActivityObjectView {
   inReplyToObjectId: string | null;
   originalObjectType?: "Note" | "Page" | null;
   originalObjectContext?: string | null;
+  directPersonActorIds?: string[];
   publishedAt: string;
   discordGuildId: number | null;
   discordChannelId: number | null;

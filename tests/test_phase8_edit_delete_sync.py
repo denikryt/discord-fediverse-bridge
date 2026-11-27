@@ -300,7 +300,7 @@ async def test_source_message_edit_propagates_to_mirrors_and_ap(tmp_path: Path) 
 
     # Mirror message must be edited with just the new content (no header to preserve).
     fake_mirror_thread.fetch_message.assert_awaited_once_with(mirror_msg_id)
-    fake_mirror_message.edit.assert_awaited_once_with(content="Edited content")
+    fake_mirror_message.edit.assert_awaited_once_with(content="Edited content", suppress=True)
     bot.track_message_edit.assert_called_once_with(mirror_msg_id)
 
 
@@ -417,7 +417,7 @@ async def test_mirror_edit_failure_does_not_block_ap_update(tmp_path: Path) -> N
 
     # Second mirror must still be edited despite first failing.
     success_thread.fetch_message.assert_awaited_once_with(mirror_msg_id_2)
-    success_message.edit.assert_awaited_once_with(content="New content")
+    success_message.edit.assert_awaited_once_with(content="New content", suppress=True)
 
 
 # ---------------------------------------------------------------------------
@@ -651,9 +651,9 @@ async def test_inbound_comment_update_edits_all_discord_deliveries(
     assert result.status == "processed"
     # Both Discord messages must have been edited.
     thread1.fetch_message.assert_awaited_once_with(msg_id_1)
-    msg1.edit.assert_awaited_once_with(content="New comment body")
+    msg1.edit.assert_awaited_once_with(content="New comment body", suppress=True)
     thread2.fetch_message.assert_awaited_once_with(msg_id_2)
-    msg2.edit.assert_awaited_once_with(content="New comment body")
+    msg2.edit.assert_awaited_once_with(content="New comment body", suppress=True)
 
 
 @pytest.mark.asyncio
@@ -776,10 +776,10 @@ async def test_inbound_comment_delete_marks_all_discord_deliveries_deleted(
     assert result.status == "processed"
     # Both Discord messages must be edited to the deletion placeholder, not deleted.
     thread1.fetch_message.assert_awaited_once_with(msg_id_1)
-    msg1.edit.assert_awaited_once_with(content="*deleted by creator*")
+    msg1.edit.assert_awaited_once_with(content="*deleted by creator*", suppress=True)
     msg1.delete.assert_not_awaited()
     thread2.fetch_message.assert_awaited_once_with(msg_id_2)
-    msg2.edit.assert_awaited_once_with(content="*deleted by creator*")
+    msg2.edit.assert_awaited_once_with(content="*deleted by creator*", suppress=True)
     msg2.delete.assert_not_awaited()
 
 
@@ -848,10 +848,10 @@ async def test_inbound_post_delete_marks_all_thread_starters_deleted(
     assert result.status == "processed"
     # Both starter messages must be edited to the deletion placeholder, not threads deleted.
     thread1.fetch_message.assert_awaited_once_with(starter_msg_id_1)
-    starter1.edit.assert_awaited_once_with(content="*deleted by creator*")
+    starter1.edit.assert_awaited_once_with(content="*deleted by creator*", suppress=True)
     thread1.delete.assert_not_awaited()
     thread2.fetch_message.assert_awaited_once_with(starter_msg_id_2)
-    starter2.edit.assert_awaited_once_with(content="*deleted by creator*")
+    starter2.edit.assert_awaited_once_with(content="*deleted by creator*", suppress=True)
     thread2.delete.assert_not_awaited()
 
 
@@ -1012,9 +1012,9 @@ async def test_inbound_post_update_edits_discord_thread_starters(
     assert result.status == "processed"
     # Both starter messages must have been fetched and edited.
     thread1.fetch_message.assert_awaited_once_with(starter_msg_id_1)
-    starter1.edit.assert_awaited_once_with(content="New post body")
+    starter1.edit.assert_awaited_once_with(content="New post body", suppress=True)
     thread2.fetch_message.assert_awaited_once_with(starter_msg_id_2)
-    starter2.edit.assert_awaited_once_with(content="New post body")
+    starter2.edit.assert_awaited_once_with(content="New post body", suppress=True)
 
 
 @pytest.mark.asyncio
@@ -1114,7 +1114,7 @@ async def test_mirror_edit_preserves_username_header(tmp_path: Path) -> None:
 
     # Mirror must be edited with header preserved and body replaced.
     mirror_message.edit.assert_awaited_once_with(
-        content="`alice@lemmy.example`\n\nEdited body text"
+        content="`alice@lemmy.example`\n\nEdited body text", suppress=True
     )
 
 
@@ -1190,7 +1190,7 @@ async def test_inbound_comment_update_preserves_username_header(tmp_path: Path) 
     assert result.status == "processed"
     # Header must be preserved; only the body below it is replaced.
     message.edit.assert_awaited_once_with(
-        content="`bob@lemmy.example`\n\nUpdated comment text"
+        content="`bob@lemmy.example`\n\nUpdated comment text", suppress=True
     )
 
 

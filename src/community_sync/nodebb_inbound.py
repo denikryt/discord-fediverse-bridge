@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..activitypub_models import ActivityPubEvent, RemoteGroupAnnounceEvent
+from ..federated_media import media_source_from_note
 from ..inbound_activity_outcomes import InboundActivityOutcome
 from ..nodebb_discovery import AP_ACCEPT, NodeBBDiscoveryError, NodeBBUnavailable, SecureNodeBBJSON, _origin
 from .inbound_mapping import get_accepted_subscriptions
@@ -104,7 +105,8 @@ def _normalized_event(
             "post_ap_id": root_id, "parent_ap_id": parent_id,
             "attributed_to_actor_id": owner, "author_name": author_name,
             "title": note.get("name") if isinstance(note.get("name"), str) else None,
-            "body_markdown": content, "url": ap_id, "published_at": posted,
+            "body_markdown": content, "media_source": media_source_from_note(note),
+            "url": ap_id, "published_at": posted,
         },
     })
 

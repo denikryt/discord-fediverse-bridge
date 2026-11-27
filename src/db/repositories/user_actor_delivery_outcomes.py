@@ -83,7 +83,7 @@ class UserActorDeliveryOutcomeRepository(BaseRepository):
     def record_unresolved(
         self, delivery_id: int, claim_token: str, error: str | None
     ) -> None:
-        """Retain ambiguous direct Group send evidence without automatic retries."""
+        """Retain ambiguous direct Group/Person evidence without blind retries."""
         with self.session() as session:
             delivery = session.scalar(select(UserActorOutboundDelivery).where(
                 UserActorOutboundDelivery.id == delivery_id,
@@ -95,7 +95,7 @@ class UserActorDeliveryOutcomeRepository(BaseRepository):
             delivery.status = "unknown"
             delivery.claim_token = None
             delivery.claimed_at = None
-            delivery.last_error = bound_delivery_error(error or "direct Group HTTP outcome unknown")
+            delivery.last_error = bound_delivery_error(error or "direct endpoint HTTP outcome unknown")
             delivery.next_attempt_at = None
 
     def record_outcome(

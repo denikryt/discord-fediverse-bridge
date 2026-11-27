@@ -6,7 +6,24 @@ import { Page } from "@fedify/vocab";
 import { type Object as ActivityObject } from "@fedify/vocab";
 
 import type { PythonBridgeReadClient } from "./python-bridge-client.js";
-import type { BridgeEvent } from "./types.js";
+import type { BridgeEvent, RemotePersonContentEvent, RemotePersonCommentEvent } from "./types.js";
+
+const ACTIVITYSTREAMS_PUBLIC = "https://www.w3.org/ns/activitystreams#Public";
+
+/** Fedify serializes ActivityStreams Public as as:Public in compact JSON-LD. */
+function canonicalizePublicRecipients(source: Record<string, unknown>): Record<string, unknown> {
+  const expand = (value: unknown): unknown => {
+    if (value === "as:Public" || value === "Public") return ACTIVITYSTREAMS_PUBLIC;
+    if (Array.isArray(value)) return value.map(expand);
+    return value;
+  };
+  const object = asRecord(source.object);
+  return {
+    ...source,
+    to: expand(source.to), cc: expand(source.cc),
+    object: object == null ? source.object : { ...object, to: expand(object.to), cc: expand(object.cc) },
+  };
+}
 
 export interface NormalizeOptions {
   /** Internal bridge lookup boundary used for local parent/object resolution. */
@@ -37,6 +54,112 @@ export async function normalizeCreateActivity(
   }
 
   return null;
+}
+
+/** Shared syntactic proof for a direct Person Note or object-ID Delete.
+ *
+ * A caller still decides whether the verified payload is a root or a reply;
+ * these routes have intentionally different public-addressing contracts.
+ */
+interface DirectPersonEnvelope {
+  source: Record<string, unknown>;
+  type: "Create" | "Update" | "Delete";
+  actorId: string;
+  activityId: string;
+  object: Record<string, unknown> | null;
+  objectId: string;
+  occurredAt: string;
+}
+
+function parseDirectPersonEnvelope(source: Record<string, unknown>): DirectPersonEnvelope | null {
+  /** Canonicalize public IDs before the serialized source is sent to Python. */
+  const activity = canonicalizePublicRecipients(source);
+  const type = activity.type;
+  if (type !== "Create" && type !== "Update" && type !== "Delete") return null;
+  const actorId = asCanonicalActorId(activity.actor);
+  const activityId = asString(activity.id);
+  const object = asRecord(activity.object);
+  const objectId = object == null ? asString(activity.object) : asString(object.id);
+  if (actorId == null || activityId == null || objectId == null) return null;
+  if (type !== "Delete" && (
+    object?.type !== "Note"
+    || asCanonicalActorId(object.attributedTo) !== actorId
+    || tryResolveCommunityActorIdFromJson(object) != null
+  )) return null;
+  return {
+    source: activity, type, actorId, activityId, object, objectId,
+    occurredAt: asString(object?.updated) ?? asString(object?.published)
+      ?? asString(activity.published) ?? new Date().toISOString(),
+  };
+}
+
+/** Normalize only a verified direct Person root, never a Group Announce. */
+export function normalizeDirectRemotePersonEventFromJson(
+  activity: Record<string, unknown>,
+): RemotePersonContentEvent | null {
+  const parsed = parseDirectPersonEnvelope(activity);
+  if (parsed == null) return null;
+  const { source, type, actorId, activityId, object, objectId, occurredAt } = parsed;
+  // Roots must be public in `to` on both levels, and cannot reply to a parent.
+  if (type !== "Delete" && (
+    asString(object?.inReplyTo) != null
+    || !normalizeStringArray(object?.to).includes(ACTIVITYSTREAMS_PUBLIC)
+    || !normalizeStringArray(source.to).includes(ACTIVITYSTREAMS_PUBLIC)
+  )) return null;
+  return {
+    event_type: type === "Create" ? "remote.person.created"
+      : type === "Update" ? "remote.person.updated" : "remote.person.deleted",
+    delivery_id: activityId,
+    occurred_at: occurredAt,
+    actor_id: actorId,
+    verified_sender_actor_id: actorId,
+    source_activity_id: activityId,
+    source_activity_json: source,
+    object: {
+      ap_id: objectId,
+      // Note.name describes the Note, never its Person author.
+      // The verified typed actor may supply a profile-level name upstream.
+      author_name: lastPathSegment(actorId),
+      avatar_url: null,
+      body_markdown: object == null ? null : resolveMarkdownBodyFromJson(object),
+      published_at: asString(object?.published),
+    },
+  };
+}
+
+/** Normalize an authenticated direct Note reply only after known-root lookup. */
+export function normalizeDirectRemotePersonCommentFromJson(
+  activity: Record<string, unknown>,
+): RemotePersonCommentEvent | null {
+  const parsed = parseDirectPersonEnvelope(activity);
+  if (parsed == null) return null;
+  const { source, type, actorId, activityId, object, objectId, occurredAt } = parsed;
+  // Replies need an immediate AP parent, but Public may be in either to or cc.
+  // A Delete may contain only the object IRI; ownership is checked in Python.
+  if (type !== "Delete" && (
+    asString(object?.inReplyTo) == null
+    || ![...normalizeStringArray(object?.to), ...normalizeStringArray(object?.cc)].includes(ACTIVITYSTREAMS_PUBLIC)
+    || ![...normalizeStringArray(source.to), ...normalizeStringArray(source.cc)].includes(ACTIVITYSTREAMS_PUBLIC)
+  )) return null;
+  return {
+    event_type: type === "Create" ? "remote.person.comment.created"
+      : type === "Update" ? "remote.person.comment.updated" : "remote.person.comment.deleted",
+    delivery_id: activityId,
+    occurred_at: occurredAt,
+    actor_id: actorId,
+    verified_sender_actor_id: actorId,
+    source_activity_id: activityId,
+    source_activity_json: source,
+    object: {
+      ap_id: objectId,
+      parent_ap_id: asString(object?.inReplyTo),
+      // Note.name describes the Note, never its Person author.
+      // The verified typed actor may supply a profile-level name upstream.
+      author_name: lastPathSegment(actorId),
+      body_markdown: object == null ? null : resolveMarkdownBodyFromJson(object),
+      published_at: asString(object?.published),
+    },
+  };
 }
 
 export async function normalizeCreateActivityFromJson(
@@ -70,7 +193,7 @@ export async function normalizeCreateActivityFromJson(
 export async function normalizeUpdateActivityFromJson(
   activity: unknown,
   options: NormalizeOptions = {},
-): Promise<BridgeEvent | null> {
+): Promise<BridgeEvent | RemotePersonContentEvent | null> {
   // Handles the unwrapped Update record extracted from Announce(Update(...)).
   // Delegates to the same sub-normalizers as Create but overrides event_type.
   if (!isRecord(activity) || activity.type !== "Update") {
@@ -89,6 +212,8 @@ export async function normalizeUpdateActivityFromJson(
   }
 
   if (object.type === "Note") {
+    const remote = normalizeDirectRemotePersonEventFromJson(activity);
+    if (remote != null) return remote;
     // NodeBB uses Note for both topic roots and replies. An Update must not
     // infer "comment" from vocabulary type alone: inReplyTo distinguishes
     // the canonical root from a reply in the same Group.
@@ -111,10 +236,27 @@ export async function normalizeUpdateActivityFromJson(
   return null;
 }
 
+/** Normalize a nested Delete from the verified Announce serialization only.
+ * The outer signer is a routing hint; Python independently proves Group
+ * authority and ownership against the saved first Create. Do not inject a
+ * synthetic audience into the original, fingerprinted inner activity.
+ */
+export async function normalizeVerifiedAnnounceDeleteFromJson(
+  announce: Record<string, unknown>,
+  options: NormalizeOptions = {},
+): Promise<BridgeEvent | RemotePersonContentEvent | null> {
+  if (announce.type !== "Announce") return null;
+  const inner = asRecord(announce.object);
+  if (inner?.type !== "Delete") return null;
+  const groupScope = resolveCommunityActorIdForDelete({ audience: announce.actor });
+  return normalizeDeleteActivityFromJson(inner, options, groupScope);
+}
+
 export async function normalizeDeleteActivityFromJson(
   activity: unknown,
   options: NormalizeOptions = {},
-): Promise<BridgeEvent | null> {
+  verifiedAnnounceGroupScope: string | null = null,
+): Promise<BridgeEvent | RemotePersonContentEvent | null> {
   // Handles the unwrapped Delete record extracted from Announce(Delete(...)).
   // Lemmy 0.19 sends object as a plain string URL (primary path).
   // Older format fallback: object may be { id: "..." }.
@@ -132,7 +274,12 @@ export async function normalizeDeleteActivityFromJson(
     return null;
   }
 
-  const personalTarget = await loadPersonalConversationTarget(apId, options);
+  const innerGroup = resolveCommunityActorIdForDelete(activity);
+  // A verified Group wrapper is a distribution event, not a direct Person
+  // mutation. In the missing-audience case it must not be routed by an
+  // unrelated Personal Feed mapping of the same Note.
+  const personalTarget = verifiedAnnounceGroupScope == null
+    ? await loadPersonalConversationTarget(apId, options) : null;
   if (personalTarget != null) {
     const actorId = asCanonicalActorId(activity.actor);
     if (actorId == null) return null;
@@ -153,18 +300,19 @@ export async function normalizeDeleteActivityFromJson(
     };
   }
 
-  // community_actor_id lives directly on the Delete record's audience field —
-  // confirmed from real logs. object is a plain string so we can't read it from there.
-  // Fall back to cc[0] if audience is absent.
+  // Prefer explicit nested addressing. If it conflicts with the outer signer,
+  // leave it intact so the Group authorization boundary can reject it.
+  // NodeBB can omit inner addressing; the authenticated distributor then
+  // supplies the exact Group scope before the ordinary Person fallback.
   const communityActorUrl =
-    resolveCommunityActorIdForDelete(activity) ??
+    innerGroup ?? verifiedAnnounceGroupScope ??
     asString(activity.actor) ??
     "";
 
   // Infer kind from the URL path: /post/ → post, /comment/ → comment.
   const kind = inferKindFromApId(apId);
   if (!kind) {
-    return null;
+    return normalizeDirectRemotePersonEventFromJson(activity);
   }
 
   const eventType = kind === "post" ? "post.deleted" : "comment.deleted";
@@ -217,6 +365,7 @@ async function normalizePostActivity(
       ap_id: apId,
       author_name: await resolveAuthorName(activity),
       body_markdown: resolveMarkdownBody(object),
+      media_source: await typedMediaSource(object),
       kind: "post",
       lemmy_id: parseInboundPostNumericId(apId, activity.actorId?.href ?? ""),
       parent_ap_id: null,
@@ -248,7 +397,8 @@ async function normalizeNoteRootActivity(
     occurred_at: published,
     object: {
       ap_id: objectId, author_name: await resolveAuthorName(activity),
-      body_markdown: resolveMarkdownBody(object), kind: "post", lemmy_id: 0,
+      body_markdown: resolveMarkdownBody(object),
+      media_source: await typedMediaSource(object), kind: "post", lemmy_id: 0,
       parent_ap_id: null, post_ap_id: null, post_lemmy_id: null,
       published_at: published, title: resolveText(object.name),
       url: resolveObjectUrl(object) ?? objectId,
@@ -271,7 +421,8 @@ function normalizeNoteRootActivityFromJson(
     event_type: "post.created", occurred_at: published,
     object: {
       ap_id: objectId, author_name: lastPathSegment(owner),
-      body_markdown: resolveMarkdownBodyFromJson(object), kind: "post", lemmy_id: 0,
+      body_markdown: resolveMarkdownBodyFromJson(object),
+      media_source: mediaSourceFromJson(object), kind: "post", lemmy_id: 0,
       parent_ap_id: null, post_ap_id: null, post_lemmy_id: null,
       published_at: published, title: asString(object.name),
       url: asString(object.url) ?? objectId, attributed_to_actor_id: owner,
@@ -333,6 +484,7 @@ async function normalizeCommentActivity(
       ap_id: apId,
       author_name: await resolveAuthorName(activity),
       body_markdown: resolveMarkdownBody(object),
+      media_source: await typedMediaSource(object),
       kind: "comment",
       lemmy_id: parseLemmyNumericIdOrZero(apId, "comment"),
       parent_ap_id: replyContext.parentApId,
@@ -448,6 +600,7 @@ function normalizePostActivityFromJson(
       ap_id: apId,
       author_name: resolveAuthorNameFromJson(activity, object),
       body_markdown: resolveMarkdownBodyFromJson(object),
+      media_source: mediaSourceFromJson(object),
       kind: "post",
       lemmy_id: parseInboundPostNumericId(apId, asCanonicalActorId(activity.actor) ?? ""),
       parent_ap_id: null,
@@ -527,6 +680,7 @@ async function normalizeCommentActivityFromJson(
       ap_id: apId,
       author_name: resolveAuthorNameFromJson(activity, object),
       body_markdown: resolveMarkdownBodyFromJson(object),
+      media_source: mediaSourceFromJson(object),
       kind: "comment",
       lemmy_id: parseLemmyNumericIdOrZero(apId, "comment"),
       parent_ap_id: replyContext.parentApId,
@@ -587,6 +741,23 @@ async function resolveCommentCommunityActorIdFromJson(
     parentMapping.objectId,
   );
   return parentMapping.communityActorUrl;
+}
+
+/** Retain only image-bearing source fields for Python's shared media parser.
+ * No fetching here: the authenticated delivery worker owns the network limits.
+ */
+function mediaSourceFromJson(object: Record<string, unknown>): Record<string, unknown> | undefined {
+  const result: Record<string, unknown> = {};
+  if (object.attachment != null) result.attachment = object.attachment;
+  if (typeof object.content === "string" && /<img\b/i.test(object.content)) {
+    result.content = object.content;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+/** Serialize the already resolved typed object, not a second object fetch. */
+async function typedMediaSource(object: ActivityObject): Promise<Record<string, unknown> | undefined> {
+  return mediaSourceFromJson(await object.toJsonLd() as Record<string, unknown>);
 }
 
 function resolveMarkdownBodyFromJson(object: Record<string, unknown>): string | null {
@@ -1043,19 +1214,28 @@ function parseLemmyNumericIdOrZero(apId: string, kind: "post" | "comment"): numb
   return tryParseLemmyNumericId(apId, kind) ?? 0;
 }
 
-function resolveCommunityActorIdForDelete(
+export function resolveCommunityActorIdForDelete(
   activity: Record<string, unknown>,
 ): string | null {
-  // audience is present on the Delete record itself in Lemmy 0.19 (confirmed from real logs).
-  // Fall back to the first community actor id found in cc or to.
-  const audience = asString(activity.audience);
-  if (audience && isCommunityActorId(audience)) {
-    return audience;
+  /** The signed ActivityStreams addressing may use strings or { id } IRI nodes.
+   * Keep this extraction local to Delete rather than broadening Community
+   * identity resolution for unrelated Create, Follow or direct Person paths.
+   */
+  const iries = [activity.audience, activity.cc, activity.to].flatMap((value) => {
+    const values = Array.isArray(value) ? value : [value];
+    return values.flatMap((item) => {
+      const id = asString(item) ?? asString(asRecord(item)?.id);
+      return id == null ? [] : [id];
+    });
+  });
+  for (const iri of iries) {
+    // Malformed recipients cannot be interpreted as Group identity and must
+    // not abort otherwise authenticated processing with a URI parser error.
+    try {
+      if (isCommunityActorId(iri)) return iri;
+    } catch {
+      continue;
+    }
   }
-
-  const candidates = [
-    ...normalizeStringArray(activity.cc),
-    ...normalizeStringArray(activity.to),
-  ];
-  return candidates.find((c) => isCommunityActorId(c)) ?? null;
+  return null;
 }

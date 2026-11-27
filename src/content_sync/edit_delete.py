@@ -47,7 +47,8 @@ async def edit_discord_message(
         )
     else:
         content = new_content
-    await message.edit(content=content)
+    # Community Create suppresses previews. Never re-enable them on edit.
+    await message.edit(content=content, suppress=True)
 
 
 async def mark_discord_message_deleted(
@@ -59,4 +60,5 @@ async def mark_discord_message_deleted(
     """Mark one mirrored Discord message as deleted without removing it."""
     thread = await bot.get_thread_by_id(discord_thread_id)
     message = await thread.fetch_message(discord_message_id)
-    await message.edit(content="*deleted by creator*")
+    # Retain suppression so a preview cannot display the deleted body.
+    await message.edit(content="*deleted by creator*", suppress=True)

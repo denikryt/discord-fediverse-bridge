@@ -1,8 +1,8 @@
 # Discord–Fediverse Bridge
 
-A self-hosted bridge between Discord forum channels and ActivityPub community actors. The primary interoperability target is Lemmy and the wider Threadiverse. The project also implements a limited Mastodon-compatible subset for replies to locally hosted communities.
+A self-hosted bridge between Discord and ActivityPub communities and people. Forum channels interoperate with Lemmy, NodeBB, and other Threadiverse communities; registered users can publish personal feeds and subscribe to public posts from remote Person actors through Discord text channels.
 
-This is not a generic ActivityPub server, a Discord archive, or a tool for exporting an entire Discord server. It synchronizes new activity only through explicitly mapped Discord forum channels. One bridge deployment can serve multiple Discord guilds.
+This is not a generic ActivityPub server, a Discord archive, or a tool for exporting an entire Discord server. It synchronizes new activity only through explicitly assigned Discord forum or text channels. One bridge deployment can serve multiple Discord guilds.
 
 ## Supported operating modes
 
@@ -32,6 +32,21 @@ A Discord forum channel can be exposed as a local ActivityPub `Group` actor.
 
 The project does not currently implement permanent removal of a local community actor.
 
+
+### Personal Feed (Discord → ActivityPub)
+
+A registered Discord user can bind one text channel using `/account-settings feed-bind`. New messages authored by that user in the bound channel become public ActivityPub `Note` posts attributed to their own `Person` actor. When a remote reply arrives, the bot creates a thread under the original Discord message and renders the comment there. Nested replies use native Discord Reply; registered Discord users can participate from the thread with the correct ActivityPub `inReplyTo`.
+
+### Remote Person Feed (ActivityPub → Discord)
+
+Each registered Discord user can send a signed `Follow` from **their own Person actor** to a remote Person. The shared bridge `Service` actor does not own these follows. A user can assign the followed actor to multiple text channels; a text channel can receive posts from several followed actors or multiple local subscribers without duplicate copies.
+
+- Use `/person-feed follow actor channel`, `/person-feed add-channel`, `/person-feed remove-channel`, `/person-feed unfollow`, and `/person-feed list` to manage personal follows and destinations. The first two commands require Discord `Manage Server` in addition to the normal registered-guild DiscordOps authorization; other operations affect only the caller's subscriptions.
+- Only **public** `Note` posts received after acceptance are copied; no historical timeline retrieval takes place. A top-level remote post uses a bot-owned Incoming webhook with the original handle and avatar. The bot creates a Discord thread under that post.
+- Replies inside the thread always use the normal bot. Registered Discord users' replies are published from their Person actor; copies in other mapped text channels retain a single ActivityPub identity and their own Discord reply references.
+- Removing the final eligible channel assignment stops new queued posts; it does not stop authenticated edits/deletes of already delivered copies. Each user's final assignment schedules `Undo(Follow)` for their own Follow generation.
+
+
 ## Explicit routing boundaries
 
 The bridge does not scan or federate every channel in a Discord server.
@@ -39,13 +54,13 @@ The bridge does not scan or federate every channel in a Discord server.
 Content is handled only when all applicable conditions are true:
 
 1. The Discord guild is allowed by bridge policy.
-2. A specific Discord **forum channel** has been assigned to a remote subscription or local community.
-3. The event occurs in a thread belonging to that mapped forum channel.
-4. The Discord author is not a bot.
+2. A Discord **forum channel** is assigned to a community mode, or a **text channel** is assigned to Personal Feed / Remote Person Feed.
+3. The event belongs to the selected mapped forum thread, personal channel, or remote-person discussion thread.
+4. For Discord-originated publishing, the author is not a bot or webhook.
 5. For Discord-to-Fediverse publishing, the author has registered a local bridge identity.
 6. The applicable community, federation, and ban policies allow the action.
 
-There is no historical backfill. Mapping a channel affects new supported activity; the bridge does not enumerate and republish its existing thread history.
+There is no historical backfill. Mapping a channel affects new supported activity; the bridge does not enumerate and republish its existing forum/thread history or crawl remote Person timelines.
 
 Discord channel visibility is not a privacy boundary for ActivityPub. The project does not determine whether a selected forum is socially "public" or "private" inside Discord. Once a forum is mapped, eligible new content can be delivered to independent Fediverse servers. Operators should therefore use dedicated forum channels whose purpose and federation status are clear to participants.
 
@@ -76,12 +91,14 @@ Registered Discord users publish through their own local ActivityPub `Person` ac
 - The local ActivityPub username is stable even if the Discord display name changes.
 - The community actor does not impersonate the author of Discord-originated content.
 
-Remote-community subscriptions are different: the shared bridge `Service` actor owns the Follow relationship, while the registered user actor owns each published post or comment.
+Remote-community subscriptions use the shared bridge `Service` actor; remote-Person subscriptions use a separate signed `Follow` from each registered user actor. Content authored by a local user always belongs to that user actor.
 
 ## What is synchronized
 
 Supported Discord-to-Fediverse flows:
 
+- a bound Personal Feed message → a public `Note` from the registered Person actor;
+- a reply in a remote-Person post thread → one signed Person `Note` and bot copies in other destinations;
 - forum thread starter → post-compatible ActivityPub object;
 - thread message → comment-compatible ActivityPub object;
 - supported message/thread edit → `Update`;
@@ -89,7 +106,9 @@ Supported Discord-to-Fediverse flows:
 
 Supported Fediverse-to-Discord flows:
 
-- supported post create → a Discord forum thread in every eligible subscribed or local-community Discord surface;
+- a public `Note` from a followed Person → an Incoming-webhook root post in each assigned text channel, with an associated thread;
+- remote comments to retained Person posts → bot-authored messages or native Replies in those threads;
+- supported community post create → a Discord forum thread in every eligible subscribed or local-community Discord surface;
 - supported comment create → a Discord message in every corresponding eligible Discord thread;
 - supported update → edits of the corresponding Discord mirrors;
 - supported delete → deletion of the corresponding Discord mirrors;
@@ -154,7 +173,7 @@ See [docs/known_issues.md](docs/known_issues.md) for verified limitations and op
 
 ## Discord access and permissions
 
-The bot enables Discord's guild, message, and privileged message-content intents because it must receive the text of new messages in mapped forum threads.
+The bot enables Discord's guild, message, and privileged message-content intents because it must receive the text of new messages in mapped forum threads and Person feed channels.
 
 Its runtime reads message content in these cases:
 
@@ -164,6 +183,8 @@ Its runtime reads message content in these cases:
 - stored mirror-message IDs when applying supported edits or deletes.
 
 `Read Message History` is used for the starter-message fallback and for fetching known messages by stored IDs. The implementation does not enumerate arbitrary server history, search unrelated channels, or backfill old discussions. However, Discord permissions are capability-based: if the bot is granted access to additional channels and message history, Discord may technically allow it to read messages there even though this code does not use that access for bridge routing. Operators should grant channel visibility and permissions only where required.
+
+For Remote Person Feed destinations, the bot requires effective `View Channel`, `Read Message History`, `Send Messages`, `Manage Webhooks`, `Create Public Threads`, and `Send Messages in Threads` on the target text channel. Revoking them prevents new delivery or native Reply and is recorded per destination.
 
 Typical capabilities used by the bridge include:
 
@@ -188,10 +209,13 @@ Creating a local community or subscribing a forum channel is currently available
 
 The creator becomes the local community owner. Community management is then restricted to that owner and bridge super-admins. Bridge-wide policy and global-ban operations are restricted to bridge super-admins.
 
+Remote Person Feed channel creation and extension require the caller's Discord `Manage Server` permission. `/person-feed list|remove-channel|unfollow` only access the invoking user's subscriptions. Other command permissions retain their existing rules.
+
 Registered commands include:
 
 - `/register`
-- `/account-settings view|profile|metadata|avatar|header|clear-avatar|clear-header`
+- `/account-settings view|profile|metadata|avatar|header|clear-avatar|clear-header|feed-bind`
+- `/person-feed follow|add-channel|remove-channel|unfollow|list`
 - `/subscribe-community`
 - `/unsubscribe-channel`
 - `/list-subscriptions`
